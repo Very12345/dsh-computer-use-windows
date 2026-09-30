@@ -1,0 +1,9 @@
+Windows UIA backend derived from Yu-tao-Li/dsh-computer-use-win at
+653dd11e4c36749c062828086cfb65c18369e4d9 (version 0.2.3), itself derived
+from cgissing/windows-computer-use. Copyright (c) 2026 Yu-tao-Li and cgissing.
+Their MIT license is preserved in native/LICENSE.
+
+The DSH integration, observation protocol, policy and tests are new code.
+No OpenAI native binaries or @oai/sky code are included. This is an independent
+implementation inspired by documented computer-use workflows, not an official
+OpenAI plugin, and does not promise equivalent model performance.

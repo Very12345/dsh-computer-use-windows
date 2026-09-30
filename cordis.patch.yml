@@ -1,0 +1,6 @@
+- insert:
+    - id: computer-use-windows
+      name: '@very12345/dsh-computer-use-windows'
+      config:
+        enabled: true
+        allowedApps: []
