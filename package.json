@@ -1,6 +1,6 @@
 {
   "name": "@very12345/dsh-computer-use-windows",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Windows desktop computer use for DSH with bound windows, fresh observations and verified actions",
   "type": "module",
   "license": "MIT",
@@ -10,10 +10,9 @@
   "exports": { ".": "./src/index.js", "./client": "./src/client.js", "./package.json": "./package.json" },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings"] } },
   "files": ["src", "native", "skills", "docs", "cordis.patch.yml", "README.md", "LICENSE", "NOTICE"],
-  "scripts": { "test": "node --test test/*.test.js", "verify": "npm test", "smoke": "node test/windows-smoke.js" },
+  "scripts": { "test": "node --test test/*.test.js", "verify": "npm test", "smoke": "node test/windows-smoke.js", "setup-sdk": "node test/install-sdk.js" },
   "engines": { "node": ">=22" },
   "os": ["win32"],
   "peerDependencies": { "@deepseek-ai/dsh-tools": "^0.2.0-rc.2", "@deepseek-ai/schemastery": "^3.18.4" },
-  "peerDependenciesMeta": { "@deepseek-ai/dsh-tools": { "optional": true }, "@deepseek-ai/schemastery": { "optional": true } },
-  "devDependencies": { "@deepseek-ai/cordis": "4.0.4", "@deepseek-ai/dsh-tools": "0.2.0-rc.2", "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2", "@deepseek-ai/dsh-skill": "0.2.0-rc.2", "@deepseek-ai/dsh-scope": "0.2.0-rc.2", "@deepseek-ai/schemastery": "3.18.4" }
+  "peerDependenciesMeta": { "@deepseek-ai/dsh-tools": { "optional": true }, "@deepseek-ai/schemastery": { "optional": true } }
 }

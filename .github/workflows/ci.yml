@@ -10,6 +10,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm run setup-sdk
       - run: npm run verify
         env:
           DSH_CU_REQUIRE_SDK: '1'
