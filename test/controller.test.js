@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DesktopController } from '../src/controller.js';
 import { assertApp,normalizeAllowedApps,validateKeys } from '../src/policy.js';
 import { FakeBackend } from './fake-backend.js';
+import { png } from './png.js';
 
 const execution=(id='a')=>({agent:{id},signal:new AbortController().signal});
 async function fixture(options={}) {const backend=new FakeBackend();const controller=new DesktopController(backend,options);const exec=execution();const {windows}=await controller.listWindows('a',exec.signal);const window=windows[0].id;const state=await controller.observe('a',{window,include_text:true},exec);return {backend,controller,exec,window,state};}
@@ -31,3 +32,39 @@ test('app catalog excludes browsers and refuses arbitrary launch arguments',asyn
 test('policy excludes browsers, terminal and credentials; key aliases work',()=>{for(const a of ['chrome.exe','msedge.exe','pwsh.exe','cmd.exe','1password.exe'])assert.throws(()=>assertApp(a),/DENIED/);assert.throws(()=>normalizeAllowedApps(['C:\\Windows\\notepad.exe']),/name/);assert.throws(()=>normalizeAllowedApps(['*.exe']),/DENIED/);assert.throws(()=>validateKeys('Win+R'),/KEY_DENIED/);assert.deepEqual(validateKeys('Control_L+Shift_L+a'),['Ctrl','Shift','a']);});
 test('content changed after observation refuses input without replacement',async()=>{const f=await fixture();f.backend.value='human edit';const result=await f.controller.act('a','type_text',{...input(f),text:'x'},f.exec);assert.equal(result.status,'outcome_unknown');assert.match(result.error.message,/CONTENT_CHANGED/);assert.equal(f.backend.value,'human edit');});
 test('ordinary non-ASCII executable names can be authorized',()=>{assert.equal(assertApp('企业应用.exe'),'企业应用.exe');assert.deepEqual(normalizeAllowedApps(['企业应用.exe']),['企业应用.exe']);});
+
+async function withShot(f, edit) {
+  const request = f.backend.request.bind(f.backend);
+  f.backend.request = async (...args) => { const result = await request(...args); if (args[0] === 'snapshot') edit(result); return result; };
+  f.state = await f.controller.observe('a', { window: f.window, include_text: true }, f.exec);
+}
+test('legacy unscaled capture omits scale and origin; every coordinate tool still maps physical pixels', async () => {
+  for (const [action, coords] of [['click',{x:200,y:160}],['scroll',{x:200,y:160,scrollY:1}],['drag',{from_x:200,from_y:160,to_x:300,to_y:260}]]) {
+    const f = await fixture();
+    await withShot(f, raw => { raw.screenshot.base64 = png(1000,600); delete raw.screenshot.origin; delete raw.screenshot.imageScale; });
+    assert.deepEqual([f.state.screenshot.width,f.state.screenshot.height], [1000,600]);
+    assert.equal((await f.controller.act('a',action,{...input(f),...coords},f.exec)).status,'dispatched');
+    const dispatched = f.backend.calls.find(c => c.action === action).args;
+    assert.deepEqual(action === 'drag' ? dispatched.path : {x:dispatched.x,y:dispatched.y},action === 'drag' ? [{x:300,y:360},{x:400,y:460}] : {x:300,y:360});
+  }
+});
+test('3120x2080 physical capture uses exact PNG size and separate axis rounding, never double DPI scaling',async()=>{
+  const f=await fixture();f.backend.window.boundingBox={x:-3120,y:40,width:3120,height:2080};
+  await withShot(f,raw=>{raw.screenshot.base64=png(1600,1067);raw.screenshot.imageScale=0.5128;});
+  assert.deepEqual([f.state.screenshot.width,f.state.screenshot.height],[1600,1067]);
+  f.backend.window.boundingBox.x+=20;f.backend.window.boundingBox.y+=10;
+  await f.controller.act('a','click',{...input(f),x:1599,y:1066},f.exec);
+  const {x,y}=f.backend.calls.find(c=>c.action==='click').args;
+  assert.equal(x,Math.round(-3120+1599*3120/1600+20));assert.equal(y,Math.round(40+1066*2080/1067+10));
+});
+test('UIA provider border differences do not masquerade as a window resize',async()=>{
+  const f=await fixture();await withShot(f,raw=>{raw.tree.boundingBox={x:108,y:208,width:984,height:584};});
+  assert.equal((await f.controller.act('a','click',{...input(f),x:100,y:80},f.exec)).status,'dispatched');
+  const {x,y}=f.backend.calls.find(c=>c.action==='click').args;assert.deepEqual({x,y},{x:300,y:360});
+});
+test('malformed screenshot metadata disables coordinates with a useful error before input',async()=>{
+  for(const edit of [s=>{s.origin=null;},s=>{s.bounds.width=0;},s=>{s.width=99;},s=>{s.imageScale=NaN;},s=>{s.base64='aGVsbG8=';}]){
+    const f=await fixture();await withShot(f,raw=>edit(raw.screenshot));assert.equal(f.state.screenshot,null);assert.match(f.state.screenshot_error,/Invalid screenshot geometry/);
+    await assert.rejects(f.controller.act('a','click',{...input(f),x:10,y:10},f.exec),/usable screenshot/);assert.equal(f.backend.calls.some(c=>c.action==='click'),false);
+  }
+});

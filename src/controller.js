@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertApp, appName, validateKeys } from './policy.js';
+import { normalizeScreenshot, validRect } from './screenshot.js';
 
 const identifier = prefix => prefix + ':' + randomUUID();
 const fail = (code, message) => { const error = new Error(message); error.code = code; throw error; };
@@ -91,7 +92,7 @@ export class DesktopController {
   async capture(owner, record, args, signal) {
     const includeScreenshot = args.include_screenshot !== false, includeText = args.include_text === true;
     const raw = await this.request('snapshot', { ...this.target(record), includeScreenshot, captureWindow: true, maxWidth: 1600, maxNodes: includeText ? 100 : 1, maxDepth: includeText ? 8 : 0, detailLevel: includeText ? 'full' : 'compact' }, signal);
-    await this.onObserve(owner, raw.tree?.boundingBox || record.raw.boundingBox, signal);
+    await this.onObserve(owner, raw.windowBounds || record.raw.boundingBox, signal);
     const elements = [], text = [];
     const walk = (node, depth = 0) => {
       if (!node) return; const index = elements.length;
@@ -100,12 +101,17 @@ export class DesktopController {
       for (const child of node.children || []) walk(child, depth + 1);
     };
     if (includeText) walk(raw.tree);
-    const shot = raw.screenshot;
-    const usableImage = shot?.base64 && !shot.occludedPossible && !shot.windowCaptureFailed;
+    let shot = null, screenshotError = '';
+    if (raw.screenshot?.base64 && !raw.screenshot.occludedPossible && !raw.screenshot.windowCaptureFailed) {
+      try { shot = normalizeScreenshot(raw.screenshot); } catch (error) { screenshotError = error.message; }
+    }
+    const usableImage = !!shot;
     const id = identifier('observation');
     // An observation supersedes earlier observations for the same owner/window.
     for (const [key, value] of this.observations) if (value.owner === owner && value.window === record.id) this.observations.delete(key);
-    const observed = { id, owner, window: record.id, epoch: this.epoch, time: this.now(), elements, rect: { ...(raw.tree?.boundingBox || record.raw.boundingBox) }, shot: usableImage ? { ...shot, base64: undefined } : null };
+    // Window enumeration and layout checks share Win32 bounds. A provider's UIA
+    // root can exclude borders or report a different rectangle altogether.
+    const observed = { id, owner, window: record.id, epoch: this.epoch, time: this.now(), elements, rect: { ...(raw.windowBounds || record.raw.boundingBox) }, shot: usableImage ? { ...shot, base64: undefined } : null };
     this.observations.set(id, observed);
     for (const [key, value] of this.observations) if (this.now() - value.time > this.ttlMs) this.observations.delete(key);
     const focused = elements.find(e => e.hasKeyboardFocus && ['Document','Edit'].includes(e.controlType)) || elements.find(e => e.hasKeyboardFocus);
@@ -113,8 +119,8 @@ export class DesktopController {
     return {
       status: 'observed', window: { id: record.id, app: appName(record.raw.executable), title: raw.tree?.name || record.raw.name }, observation_id: id,
       accessibility: includeText ? { tree: text.join('\n'), truncated: !!raw.truncated, focused_element: focused ? { index: elements.indexOf(focused), role: focused.controlType, name: focused.name } : null, document_text: document?.value ?? null } : null,
-      screenshot: usableImage ? { id, width: Math.round(shot.bounds.width * shot.imageScale), height: Math.round(shot.bounds.height * shot.imageScale), coordinate_space: 'screenshot_pixels', method: shot.method, path: shot.path } : null,
-      ...(includeScreenshot && !usableImage ? { screenshot_error: 'No unobscured target screenshot. Bring the app forward and reobserve; coordinates are disabled.' } : {}),
+      screenshot: usableImage ? { id, width: shot.width, height: shot.height, coordinate_space: 'screenshot_pixels', method: shot.method, path: shot.path } : null,
+      ...(includeScreenshot && !usableImage ? { screenshot_error: screenshotError || 'No unobscured target screenshot. Bring the app forward and reobserve; coordinates are disabled.' } : {}),
       _image: usableImage ? { data: shot.base64, mediaType: 'image/png' } : null
     };
   }
@@ -131,11 +137,12 @@ export class DesktopController {
   point(observed, record, x, y) {
     const shot = observed.shot; if (!shot) fail('SCREENSHOT_REQUIRED', 'Observe a usable screenshot before using coordinates.');
     const rect = record.raw.boundingBox;
+    if (!validRect(rect) || !validRect(observed.rect)) fail('WINDOW_GEOMETRY_REQUIRED', 'Window geometry is unavailable. Reobserve before coordinate input.');
     if (rect.width !== observed.rect.width || rect.height !== observed.rect.height) fail('LAYOUT_CHANGED', 'Window resized since capture. Reobserve before clicking.');
     number(x, 'x'); number(y, 'y');
-    const width = Math.round(shot.bounds.width * shot.imageScale), height = Math.round(shot.bounds.height * shot.imageScale);
+    const { width, height } = shot;
     if (x < 0 || y < 0 || x >= width || y >= height) fail('POINT_OUTSIDE', 'Coordinates must fall inside the returned screenshot.');
-    return { x: Math.round(shot.origin.x + x / shot.imageScale + rect.x - observed.rect.x), y: Math.round(shot.origin.y + y / shot.imageScale + rect.y - observed.rect.y) };
+    return { x: Math.round(shot.origin.x + x / shot.scaleX + rect.x - observed.rect.x), y: Math.round(shot.origin.y + y / shot.scaleY + rect.y - observed.rect.y) };
   }
   unknown(error, action) {
     return { status: 'outcome_unknown', action, error: { code: error.code || 'WINDOWS_ERROR', message: error.message }, next: 'Reobserve before retrying. A failed refresh does not mean the action was not applied.' };

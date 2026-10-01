@@ -225,7 +225,7 @@ public static class WindowsComputerUseNative {
   public static extern bool SetProcessDPIAware();
 
   [DllImport("user32.dll")]
-  public static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
+  public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT { public int left; public int top; public int right; public int bottom; }
@@ -333,8 +333,8 @@ function Load-Assemblies {
 function Set-DpiAware {
   # Per-Monitor V2 (context value -4); fall back to system-aware. Must run
   # before any screen/UIA work so coordinates and pixels are physical.
-  $ok = [WindowsComputerUseNative]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
-  if ($ok -ne [IntPtr]::Zero) {
+  $ok = Invoke-Safe { [WindowsComputerUseNative]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) } $false
+  if (-not $ok) {
     [void][WindowsComputerUseNative]::SetProcessDPIAware()
   }
 }
@@ -1525,6 +1525,14 @@ function Set-ElementValue {
 # Screenshot: window-crop (PrintWindow -> screen-region fallback) + downscale
 # ============================================================================
 
+function Get-NativeWindowBounds {
+  param([long]$Hwnd)
+  if (-not $Hwnd) { return $null }
+  $r = New-Object WindowsComputerUseNative+RECT
+  if (-not [WindowsComputerUseNative]::GetWindowRect([IntPtr]$Hwnd, [ref]$r)) { return $null }
+  return [ordered]@{ x = $r.left; y = $r.top; width = $r.right - $r.left; height = $r.bottom - $r.top }
+}
+
 function Get-ExtendedFrameBounds {
   param([long]$Hwnd)
   if (-not ($Hwnd -and $Hwnd -ne 0)) { return $null }
@@ -1586,7 +1594,9 @@ function Capture-Screenshot {
   if ($null -ne $WindowElement) {
     $hwnd = Invoke-Safe { [int64]$WindowElement.Current.NativeWindowHandle } 0
     $rect = $null
-    if ($hwnd -and $hwnd -ne 0) { $rect = Get-ExtendedFrameBounds -Hwnd $hwnd }
+    # PrintWindow renders the entire Win32 window, including resize borders.
+    # Its bitmap origin must match GetWindowRect, not DWM's visible frame.
+    if ($hwnd -and $hwnd -ne 0) { $rect = Get-NativeWindowBounds -Hwnd $hwnd }
     if ($null -eq $rect) { $rect = Convert-Rect (Invoke-Safe { $WindowElement.Current.BoundingRectangle } $null) }
 
     if ($null -ne $rect -and $hwnd -and $hwnd -ne 0) {
@@ -1599,7 +1609,9 @@ function Capture-Screenshot {
         # Try Windows.Graphics.Capture: it reads the window's composited
         # frame from DWM, so it works even when the window is occluded.
         $wgcPng = Join-Path $env:TEMP ("wcu-wgc-" + [Guid]::NewGuid().ToString("N") + ".png")
-        $wgc = Invoke-Safe { Invoke-WgcCapture -Hwnd $hwnd -Width $rect.width -Height $rect.height -OutPng $wgcPng -TimeoutMs 4000 } $null
+        $frameRect = Get-ExtendedFrameBounds -Hwnd $hwnd
+        if ($null -eq $frameRect) { $frameRect = $rect }
+        $wgc = Invoke-Safe { Invoke-WgcCapture -Hwnd $hwnd -Width $frameRect.width -Height $frameRect.height -OutPng $wgcPng -TimeoutMs 4000 } $null
         if ($null -ne $wgc -and (Test-Path $wgcPng)) {
           try {
             $src = New-Object System.Drawing.Bitmap($wgcPng)
@@ -1609,7 +1621,7 @@ function Capture-Screenshot {
             $src.Dispose()
             $bmp = $dst
             $method = "wgc"
-            $bx = $rect.x; $by = $rect.y; $bw = $rect.width; $bh = $rect.height
+            $bx = $frameRect.x; $by = $frameRect.y; $bw = $frameRect.width; $bh = $frameRect.height
           } catch {
             $bmp = $null
           }
@@ -1667,6 +1679,7 @@ function Capture-Screenshot {
   }
 
   $file = Join-Path $env:TEMP ("windows-computer-use-" + [Guid]::NewGuid().ToString("N") + ".png")
+  $imageWidth = $bmp.Width; $imageHeight = $bmp.Height
   $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
   $bmp.Dispose()
   $bytes = [System.IO.File]::ReadAllBytes($file)
@@ -1677,13 +1690,13 @@ function Capture-Screenshot {
     bytes = $bytes.Length
     method = $method
     bounds = [ordered]@{ x = $bx; y = $by; width = $bw; height = $bh }
+    width = $imageWidth
+    height = $imageHeight
+    imageScale = [double]$imageWidth / [double]$bw
+    origin = [ordered]@{ x = $bx; y = $by }
   }
   if ($occludedPossible) { $meta["occludedPossible"] = $true }
   if ($windowCaptureFailed) { $meta["windowCaptureFailed"] = $true }
-  if ($scale -ne 1.0) {
-    $meta["imageScale"] = [Math]::Round($scale, 4)
-    $meta["origin"] = [ordered]@{ x = $bx; y = $by }
-  }
   $meta["base64"] = [Convert]::ToBase64String($bytes)
   return $meta
 }
@@ -1711,6 +1724,7 @@ function Get-TreeResult {
     truncated = ($count -ge $MaxNodes)
     durationMs = [int]$stopwatch.ElapsedMilliseconds
     tree = $tree
+    windowBounds = Get-NativeWindowBounds -Hwnd (Invoke-Safe { [int64]$root.Current.NativeWindowHandle } 0)
   }
 }
 
