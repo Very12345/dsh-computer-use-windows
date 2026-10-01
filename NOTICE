@@ -7,3 +7,8 @@ The DSH integration, observation protocol, policy and tests are new code.
 No OpenAI native binaries or @oai/sky code are included. This is an independent
 implementation inspired by documented computer-use workflows, not an official
 OpenAI plugin, and does not promise equivalent model performance.
+
+The DeepSeek whale vector is extracted without changing its outline from
+https://github.com/deepseek-ai/DeepSeek-LLM/blob/main/images/logo.svg
+Copyright (c) 2023 DeepSeek. The source SVG and MIT LICENSE-CODE are preserved
+in native/assets. DeepSeek brand marks remain the property of DeepSeek.

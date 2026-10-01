@@ -22,7 +22,7 @@ dsh plugin --profile desktop add github:Very12345/dsh-computer-use-windows --ign
 - `verified` 表示预期值已回读；`dispatched` 表示已投递并刷新，须检查界面；`outcome_unknown` 表示可能已产生效果，先观察再决定是否重试。
 - 截图作为 DSH 附件保存并发送给支持图像的模型，JSON 不携带 base64。文本模型仍可读取无障碍树，不能凭没有收到的截图猜坐标。
 - 原生系统提示及 `windows-desktop` 技能包含选择窗口、焦点检查、逐步操作、失败恢复及确认要求。
-- 开始读取或操作窗口时，当前显示器出现蓝色边框及“DSH is using your computer”提示，实际鼠标动作带有蓝色位置指示和点击反馈。提示层不抢焦点、不接收点击，支持 Windows 缩放；会话结束、暂停或关闭插件时自动隐藏，也可在设置中关闭。蓝色鼠标是操作位置提示，输入仍使用系统鼠标。
+- 开始读取或操作窗口时，当前显示器出现半透明双层波浪及带官方 DeepSeek 鲸鱼的“DSH is using your computer”提示，实际鼠标动作带有蓝色位置指示和点击反馈。提示层不抢焦点、不接收点击，支持 Windows 缩放；会话结束、暂停或关闭插件时自动隐藏，也可在设置中关闭。蓝色鼠标是操作位置提示，输入仍使用系统鼠标。
 - 普通桌面应用默认可用；收紧权限时可选择应用列表模式。中文可执行文件名也能识别。立即停止优先于尚未完成的设置保存，不会被较晚返回的保存请求自动恢复。
 
 ## 工具
@@ -65,3 +65,9 @@ DSH 原生工具 / 设置 / 审批 / 技能 / 附件
 ```
 
 Windows 后端基于 MIT 项目 [Yu-tao-Li/dsh-computer-use-win](https://github.com/Yu-tao-Li/dsh-computer-use-win) 的 0.2.3 版本，保留其及 cgissing 的许可，修改了目标身份、控件作用域、焦点、坐标和输入路径。详见 [NOTICE](NOTICE)、[native/LICENSE](native/LICENSE)。DSH 控制层与测试是本仓库代码。主许可证为 MIT。
+
+## 设置页面
+
+设置页与 Windows 电脑操作页使用一致的分区、开关、状态和主题样式，支持窄屏。可即时生效的开关与选项会自动保存。
+
+波浪越过显示器边界后被裁切，呈现从屏幕边缘涌出的效果；两层以不同相位缓慢起伏。鲸鱼直接使用 DeepSeek 官方 SVG 的原始轮廓，来源与 MIT 许可保存在 `native/assets` 和 NOTICE。
