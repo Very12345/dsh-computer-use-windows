@@ -24,6 +24,10 @@ PrintWindow captures the full Win32 window, so its origin includes the resize bo
 
 Text insertion into an initially empty readable control and whole-value replacement poll for the exact expected result without resending input. Insertion into existing text is `dispatched` and must be inspected, since caret/selection position cannot be assumed. A timeout or failed refresh after dispatch reports unknown effects.
 
+Self-drawn editors use a visual path after a successful left click and its delivered screenshot. The one-shot observation retains the native input-focus handle and cursor position; the backend checks both again without activating a different foreground window. The model must inspect the input surface/caret before typing and the refreshed screenshot afterward. This path reports dispatched with visual verification required, never a successful text readback. It cannot infer an application's private internal focus when multiple self-drawn fields share one HWND.
+
+Observations expire after five minutes to accommodate longer model reasoning. Ownership, desktop epoch, layout, foreground focus and visual cursor checks remain independent of that time limit. A native rejection explicitly known to precede input is reported as rejected; ambiguous completion remains outcome_unknown.
+
 Cancellation terminates the owned STA worker. Interrupted input releases potentially held modifier/mouse state through a separate release-only helper; subsequent calls wait for cleanup. Failed cleanup blocks further backend calls until reload. Normal drag cleanup releases the mouse in `finally`. Stop also rejects already queued work, even if resume happens immediately.
 
 Screenshots stay out of canonical JSON. The host verifies image capability, saves images in DSH attachments, and projects durable image references only if the canonical result has not been replaced or blocked by the tool pipeline. A text-only route receives explicit image-delivery diagnostics and loses coordinate capability for that observation.

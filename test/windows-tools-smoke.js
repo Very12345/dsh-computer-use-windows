@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { WindowsBackend } from '../src/backend.js';
+import { DesktopController } from '../src/controller.js';
+import { dispatch } from '../src/tools.js';
+if(process.platform!=='win32')throw new Error('Windows desktop required');
+const file=path.resolve('.tmp/fixture/dsh-cu-fixture-v2.exe'),app=path.basename(file).toLowerCase();
+const backend=new WindowsBackend(),controller=new DesktopController(backend,{authorize:async name=>assert.equal(name,app)}),exec={agent:{id:'tools-smoke'},signal:new AbortController().signal},results=[];
+let window,state;
+const call=(name,args={})=>dispatch(controller,name,args,exec);
+const find=(predicate)=>{const o=controller.observations.get(state.observation_id),i=o.elements.findIndex(predicate);assert.ok(i>=0,'Required fixture element: '+JSON.stringify(o.elements.map(e=>({role:e.controlType,name:e.name,patterns:e.patterns}))));return i;};
+const element=name=>find(e=>e.name===name&&(name==='Verified input'?['Edit','Document'].includes(e.controlType):!({'Drag surface':'Pane','Visual input surface':'Pane','Scroll test':'List'}[name])||e.controlType===({'Drag surface':'Pane','Visual input surface':'Pane','Scroll test':'List'}[name])));
+const point=index=>{const o=controller.observations.get(state.observation_id),b=o.elements[index].boundingBox,s=o.shot;return {x:Math.round((b.x+b.width/2-s.origin.x)*s.scaleX),y:Math.round((b.y+b.height/2-s.origin.y)*s.scaleY)};};
+const act=async(name,args={})=>{const r=await call(name,{window,observation_id:state.observation_id,...args});assert.ok(['verified','dispatched'].includes(r.status),JSON.stringify({name,status:r.status,error:r.error,verification:r.verification,readback:r.state?.accessibility?.document_text}));state=r.state;return r;};
+const record=(tool,evidence)=>{results.push({tool,ok:true,evidence});console.log(JSON.stringify({tool,ok:true,evidence}));};
+try {
+  await fs.access(file);
+  const catalog=await call('list_apps');assert.ok(Array.isArray(catalog.apps));record('list_apps','catalog returned');
+  const before=await call('list_windows');assert.ok(!before.windows.some(w=>w.app===app),'Fixture must not already be running');record('list_windows','owned app absent before launch');
+  const launched=await call('launch_app',{app:file});assert.equal(launched.status,'launched');assert.equal(launched.windows.length,1);window=launched.windows[0].id;record('launch_app','explicit local exe path returned one owned window');
+  assert.equal((await call('get_window',{window})).window.id,window);record('get_window','opaque binding retained');
+  state=await call('get_window_state',{window,include_text:true});assert.ok(state.screenshot.width>0);assert.ok(state.accessibility.tree.includes('Verified input'));record('get_window_state','PNG dimensions and accessibility');
+  await act('activate_window');record('activate_window','fresh target state');
+  await act('click',{element_index:element('Verified input')});record('click','edit focus');
+  let typed=await act('type_text',{text:'对齐 A1'});assert.equal(typed.status,'verified');assert.equal(typed.verification.actual,'对齐 A1');record('type_text','Unicode exact readback');
+  await act('press_key',{key:'Control_L+a'});record('press_key','Ctrl+A dispatched');
+  const set=await act('set_value',{element_index:element('Verified input'),value:'整值 B2'});assert.equal(set.status,'verified');assert.equal(set.verification.actual,'整值 B2');record('set_value','exact replacement readback');
+  await act('secondary_action',{element_index:element('Invoke test'),action:'invoke'});assert.ok(state.accessibility.tree.includes('invokes=1'));record('secondary_action','Invoke changed fixture counter');
+  await act('secondary_action',{element_index:element('Toggle test'),action:'toggle'});assert.ok(state.accessibility.tree.includes('toggle=True'));
+  await act('secondary_action',{element_index:find(e=>e.controlType==='Window'),action:'Raise'});
+  await act('secondary_action',{element_index:element('Selection test'),action:'expand'});
+  await act('secondary_action',{element_index:element('Selection test'),action:'collapse'});
+  await act('secondary_action',{element_index:element('Row 002'),action:'select'});assert.ok(state.accessibility.selected_elements.some(e=>e.includes('Row 002')));
+  await act('secondary_action',{element_index:element('Scroll test'),action:'Scroll Down'});
+  const listPoint=point(element('Scroll test'));await act('scroll',{...listPoint,scrollY:600});assert.ok(!state.accessibility.tree.includes('Row 000'));record('scroll','first visible row changed');
+  const canvas=controller.observations.get(state.observation_id).elements[element('Drag surface')].boundingBox,shot=controller.observations.get(state.observation_id).shot;
+  const coords=(x,y)=>({x:Math.round((x-shot.origin.x)*shot.scaleX),y:Math.round((y-shot.origin.y)*shot.scaleY)}),from=coords(canvas.x+60,canvas.y+100),to=coords(canvas.x+canvas.width-60,canvas.y+canvas.height-60);
+  await act('drag',{from_x:from.x,from_y:from.y,to_x:to.x,to_y:to.y});assert.ok(state.accessibility.tree.includes('strokes=1'));record('drag','one completed stroke');
+  await act('click',point(element('Visual input surface')));assert.equal(state.visual_input_ready,true);
+  const visual=await act('type_text',{text:'视觉 C3'});assert.equal(visual.status,'dispatched');assert.equal(visual.verification.mode,'visual');await fs.copyFile(state.screenshot.path,'.tmp/visual-tools-smoke.png');record('visual_type_text','dispatched with screenshot, no false readback claim');
+  await act('click',{element_index:element('Verified input')});
+  const cleared=await act('set_value',{element_index:element('Verified input'),value:''});assert.equal(cleared.status,'verified');
+  await act('press_key',{key:'KP_1'});assert.equal(state.accessibility.document_text,'1');record('numpad_alias','KP_1 produced digit 1');
+  await act('press_key',{key:'KP_Enter'});assert.ok(state.accessibility.document_text.startsWith('1')&&state.accessibility.document_text.includes('\n'));record('numpad_enter','KP_Enter produced a new line');
+  await call('stop');await assert.rejects(call('get_window_state',{window}),/stopped/);controller.resume();record('stop','rejects further work until resumed');
+  await fs.writeFile('.tmp/tools-smoke-result.json',JSON.stringify({ok:true,results},null,2));
+} finally {
+  if(window){controller.resume();const record=controller.windows.get(window);if(record&&record.raw.executable.toLowerCase()===app){try{await backend.request('close_window',{...controller.target(record),activate:true},exec.signal);}catch(error){console.error('Owned fixture cleanup:',error.message);}}}
+  controller.close();
+}

@@ -1,0 +1,10 @@
+import {execFileSync} from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+if(process.platform!=='win32')throw new Error('Windows desktop required');
+fs.mkdirSync('.tmp/fixture',{recursive:true});
+const executable=path.resolve('.tmp/fixture/dsh-cu-fixture-v2.exe');
+if(fs.existsSync(executable))fs.unlinkSync(executable);
+execFileSync(path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./build-desktop-fixture.ps1',import.meta.url)),'-OutputPath',executable],{windowsHide:true,stdio:'inherit'});
+execFileSync(process.execPath,[fileURLToPath(new URL('./windows-tools-smoke.js',import.meta.url))],{stdio:'inherit'});

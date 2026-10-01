@@ -15,12 +15,14 @@ dsh plugin --profile desktop add github:Very12345/dsh-computer-use-windows --ign
 ## 行为
 
 - 窗口 id 由真实枚举产生，绑定 HWND、PID 和进程启动时间；标题变化保留绑定，关闭或重建后须重新选择。
-- 截图与 UIA 状态生成一次性 `observation_id`。默认 60 秒有效，其他输入会使旧观察失效。控件索引属于对应观察，不能跨会话使用。
+- 截图与 UIA 状态生成一次性 `observation_id`。默认 5 分钟有效，适应模型较长的思考时间；其他输入会使旧观察失效，窗口、布局、焦点及视觉输入的鼠标位置仍在操作前校验。控件索引属于对应观察，不能跨会话使用。
 - 点击坐标使用返回截图中的像素。插件处理缩放和窗口移动，窗口尺寸变化则要求重新观察。遮挡兜底截图禁止坐标操作。
 - 截图宽高读取实际 PNG，未缩小的截图也包含完整坐标元数据；横纵轴分别处理缩图舍入。窗口尺寸检查使用一致的 Win32 矩形，避免 UIA 边框差异被误判为缩放。200% 等 Windows 显示缩放不需要模型再次换算。
 - 所有桌面任务共用串行队列。每次输入后返回新截图和 UIA 状态，不自动重试输入。
-- 文本输入使用剪贴板；只允许向刚观察到且仍有焦点的编辑控件输入。空控件输入及整值替换在有限等待内回读完整值。既有文本中的插入或无法回读的控件要求模型检查实际状态。
+- 文本输入使用剪贴板；可识别的编辑控件输入前核对焦点和旧值。空控件输入及整值替换在有限等待内回读完整值。既有文本中的插入或无法回读的控件要求模型检查实际状态。
+- `type_text` 默认 `input_mode:auto`：可识别的编辑控件走 UIA 检查；微信等自绘界面走视觉输入，要求刚完成左键点击、查看点击后截图，并保持同一窗口、原生焦点和鼠标位置。视觉输入只报告 `dispatched`，由截图确认，不冒充文本回读。`input_mode:uia` 可明确禁用视觉路径。
 - `verified` 表示预期值已回读；`dispatched` 表示已投递并刷新，须检查界面；`outcome_unknown` 表示可能已产生效果，先观察再决定是否重试。
+- `rejected` 表示原生检查明确拒绝且未发送输入；超时、取消或无法确定效果仍为 `outcome_unknown`。工具不自动重发。
 - 截图作为 DSH 附件保存并发送给支持图像的模型，JSON 不携带 base64。文本模型仍可读取无障碍树，不能凭没有收到的截图猜坐标。
 - 原生系统提示及 `windows-desktop` 技能包含选择窗口、焦点检查、逐步操作、失败恢复及确认要求。
 - 开始读取或操作窗口时，当前显示器出现半透明双层波浪及带官方 DeepSeek 鲸鱼的“DSH is using your computer”提示，实际鼠标动作带有蓝色位置指示和点击反馈。提示层不抢焦点、不接收点击，支持 Windows 缩放；会话结束、暂停或关闭插件时自动隐藏，也可在设置中关闭。蓝色鼠标是操作位置提示，输入仍使用系统鼠标。
@@ -29,6 +31,8 @@ dsh plugin --profile desktop add github:Very12345/dsh-computer-use-windows --ign
 ## 工具
 
 `computer_list_apps`、`computer_list_windows`、`computer_launch_app`、`computer_get_window`、`computer_get_window_state`、`computer_click`、`computer_type_text`、`computer_press_key`、`computer_scroll`、`computer_drag`、`computer_set_value`、`computer_secondary_action`、`computer_activate_window`、`computer_stop`。
+
+`launch_app` 支持返回的应用 id 或明确的本地绝对 `.exe` 路径，不接受命令行或参数。`secondary_action` 支持 Raise、Invoke、Toggle、Select、Expand/Collapse 和控件滚动；状态提供对应 UIA patterns。`set_value` 支持可写 ValuePattern，空值替换也适用于可编辑 Document。按键支持小键盘与常见 X keysym 别名，拖动按持续时间生成连续轨迹。
 
 原生工具模式可直接调用。PTC 模式通过宿主生成的 SDK 调用这些工具；截图沿用宿主附件投影。先获取状态，查看结果，再发出下一次动作。
 
@@ -48,6 +52,7 @@ npm run setup-sdk
 npm test
 npm pack --dry-run
 npm run smoke
+npm run smoke:tools
 ```
 
 `npm test` 覆盖状态隔离、句柄更换、缩放、窗口移动/尺寸变化、输入不重放、验证延迟、取消、并发串行、审批、图像投影和 DSH SDK 注册。SDK 集成检查需要宿主提供 peer 包。
@@ -55,6 +60,8 @@ npm run smoke
 主清单没有开发依赖或安装/构建脚本，GitHub 安装直接加载发布源码。`setup-sdk` 仅用于本仓库开发验证：按 `test/sdk-packages.json` 安装固定版本的 SDK。安装期间临时声明开发依赖，结束后原样恢复主清单，不改锁文件，不属于插件运行步骤。
 
 `npm run smoke` 在 Windows 上用记事本打开专用空白测试文件，验证选择、原尺寸与缩小截图的真实宽高、像素点击后的系统鼠标位置、输入、完整回读和整值替换。只编辑脚本创建的测试文件，测试后保存其空白原值并关闭测试标签页，不关闭其他文档或进程。截图和本地验证记录放入忽略的 `.tmp/`，不进入发布包。
+
+`npm run smoke:tools` 编译本仓库原创的内存测试应用，逐项验证 14 个 DSH 工具，以及中文回读、自绘控件输入、辅助动作、空值替换和小键盘。该应用不访问用户文档、网络或账号，关闭后丢弃测试内容。对照结果和范围见 [功能对照记录](docs/TOOL-PARITY.md)。
 
 ## 架构与来源
 

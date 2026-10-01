@@ -195,6 +195,33 @@ public static class WindowsComputerUseNative {
 
   [DllImport("user32.dll")]
   public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [StructLayout(LayoutKind.Sequential)] public struct GUITHREADINFO {
+    public int cbSize; public uint flags; public IntPtr hwndActive,hwndFocus,hwndCapture,hwndMenuOwner,hwndMoveSize,hwndCaret; public RECT rcCaret;
+  }
+  [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
+  [DllImport("user32.dll")] public static extern bool IsChild(IntPtr parent, IntPtr child);
+
+  static bool KeyEvent(ushort vk, bool up, bool extended=false) {
+    var inputs=new INPUT[1];inputs[0].type=1;inputs[0].U.ki.wVk=vk;inputs[0].U.ki.dwFlags=(up?2u:0u)|(extended?1u:0u);
+    return SendInput(1,inputs,Marshal.SizeOf(typeof(INPUT)))==1;
+  }
+  public static bool SendKeyChord(string[] keys) {
+    var mods=new System.Collections.Generic.List<ushort>();string main=null;
+    foreach(var raw in keys){var k=raw.ToLowerInvariant();ushort mod=k=="ctrl"?(ushort)17:k=="shift"?(ushort)16:k=="alt"?(ushort)18:(ushort)0;if(mod!=0){if(!mods.Contains(mod))mods.Add(mod);}else{if(main!=null)throw new ArgumentException("Exactly one non-modifier key is required.");main=raw;}}
+    if(main==null)throw new ArgumentException("A non-modifier key is required.");
+    ushort vk=0;var name=main.ToLowerInvariant();int n;
+    var special=new System.Collections.Generic.Dictionary<string,ushort>{{"backspace",8},{"tab",9},{"enter",13},{"numpadenter",13},{"escape",27},{"space",32},{"pageup",33},{"pagedown",34},{"end",35},{"home",36},{"left",37},{"up",38},{"right",39},{"down",40},{"insert",45},{"delete",46},{"numpadadd",107},{"numpadsubtract",109},{"numpadmultiply",106},{"numpaddivide",111},{"numpaddecimal",110}};
+    if(special.ContainsKey(name))vk=special[name];
+    else if(name.StartsWith("numpad")&&int.TryParse(name.Substring(6),out n)&&n>=0&&n<=9)vk=(ushort)(96+n);
+    else if(name.StartsWith("f")&&int.TryParse(name.Substring(1),out n)&&n>=1&&n<=24)vk=(ushort)(111+n);
+    else if(main.Length==1){short code=VkKeyScanW(main[0]);if(code==-1)throw new ArgumentException("Unsupported key for the current keyboard layout.");vk=(ushort)(code&255);if((code&256)!=0&&!mods.Contains(16))mods.Add(16);if((code&512)!=0&&!mods.Contains(17))mods.Add(17);if((code&1024)!=0&&!mods.Contains(18))mods.Add(18);}
+    else throw new ArgumentException("Unsupported key name: "+main);
+    bool extended=(vk>=33&&vk<=40)||vk==45||vk==46||vk==111||name=="numpadenter",ok=true;
+    try {foreach(var mod in mods){if(!KeyEvent(mod,false))return false;}if(!KeyEvent(vk,false,extended))return false;ok=KeyEvent(vk,true,extended);}
+    finally {KeyEvent(vk,true,extended);for(int i=mods.Count-1;i>=0;i--)ok=KeyEvent(mods[i],true)&&ok;}
+    return ok;
+  }
 
   [DllImport("user32.dll")]
   public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -390,6 +417,10 @@ function Get-Patterns {
   if (Invoke-Safe { $Element.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern) } $false) { $items.Add("ExpandCollapse") }
   $pattern = $null
   if (Invoke-Safe { $Element.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern) } $false) { $items.Add("ScrollItem") }
+  foreach ($entry in @(@('Scroll',[System.Windows.Automation.ScrollPattern]::Pattern),@('Text',[System.Windows.Automation.TextPattern]::Pattern),@('Selection',[System.Windows.Automation.SelectionPattern]::Pattern))) {
+    $pattern=$null
+    if (Invoke-Safe { $Element.TryGetCurrentPattern($entry[1],[ref]$pattern) } $false) { $items.Add([string]$entry[0]) }
+  }
   return ,([string[]]$items.ToArray())
 }
 
@@ -443,6 +474,10 @@ function Convert-ElementInfo {
     $info["runtimeId"] = if ($null -ne $rtStr) { $rtStr } else { $null }
     $info["value"] = $value
     $info["patterns"] = $patterns
+    $valuePattern=$null
+    if (Invoke-Safe { $Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$valuePattern) } $false) { $info['isReadOnly']=$valuePattern.Current.IsReadOnly }
+    $selectionItem=$null
+    if (Invoke-Safe { $Element.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selectionItem) } $false) { $info['isSelected']=$selectionItem.Current.IsSelected }
   } else {
     if ($Depth -le 1 -and $null -ne $processId) { $info["processId"] = $processId }
     if ($null -ne $nativeHwnd -and [int64]$nativeHwnd -ne 0) { $info["nativeWindowHandle"] = $nativeHwnd }
@@ -483,19 +518,25 @@ function Set-WindowForeground {
   $hwnd = Invoke-Safe { $Element.Current.NativeWindowHandle } 0
   if (-not ($hwnd -and $hwnd -ne 0)) { return $false }
   $ptr = [IntPtr]([int64]$hwnd)
+  if ([WindowsComputerUseNative]::GetForegroundWindow() -eq $ptr) { return $true }
 
   # Beat the Windows foreground lock: a background process is normally
   # silently refused by SetForegroundWindow. Attaching our input thread to
   # the current foreground window's thread and tapping the Alt key releases
   # the lock long enough to switch (classic AutoHotkey trick).
   $fgPtr = [WindowsComputerUseNative]::GetForegroundWindow()
-  $fgThread = [uint32]0
-  $tgtThread = [uint32]0
-  [void][WindowsComputerUseNative]::GetWindowThreadProcessId($fgPtr, [ref]$fgThread)
-  [void][WindowsComputerUseNative]::GetWindowThreadProcessId($ptr, [ref]$tgtThread)
+  $fgOwner = [uint32]0
+  $tgtOwner = [uint32]0
+  $fgThread = [WindowsComputerUseNative]::GetWindowThreadProcessId($fgPtr, [ref]$fgOwner)
+  $tgtThread = [WindowsComputerUseNative]::GetWindowThreadProcessId($ptr, [ref]$tgtOwner)
+  $callerThread = [WindowsComputerUseNative]::GetCurrentThreadId()
   $attached = $false
-  if ($fgThread -ne $tgtThread -and $fgThread -ne 0) {
-    $attached = [WindowsComputerUseNative]::AttachThreadInput($tgtThread, $fgThread, $true)
+  $targetAttached = $false
+  if ($fgThread -ne $callerThread -and $fgThread -ne 0) {
+    $attached = [WindowsComputerUseNative]::AttachThreadInput($callerThread, $fgThread, $true)
+  }
+  if ($tgtThread -ne $callerThread -and $tgtThread -ne $fgThread) {
+    $targetAttached = [WindowsComputerUseNative]::AttachThreadInput($callerThread, $tgtThread, $true)
   }
   try {
     [void][WindowsComputerUseNative]::keybd_event([WindowsComputerUseNative]::VK_MENU, 0, 0, [UIntPtr]::Zero)
@@ -510,7 +551,8 @@ function Set-WindowForeground {
     [WindowsComputerUseNative]::SetForegroundWindow($ptr) | Out-Null
     Start-Sleep -Milliseconds 120
   } finally {
-    if ($attached) { [void][WindowsComputerUseNative]::AttachThreadInput($tgtThread, $fgThread, $false) }
+    if ($targetAttached) { [void][WindowsComputerUseNative]::AttachThreadInput($callerThread, $tgtThread, $false) }
+    if ($attached) { [void][WindowsComputerUseNative]::AttachThreadInput($callerThread, $fgThread, $false) }
   }
 
   # Verify the switch actually happened; report it so callers can react.
@@ -525,7 +567,9 @@ function Activate-TargetIfRequested {
     $ok = Set-WindowForeground $target
     if (-not $ok) {
       $title = [string](Get-Prop $InputObject "windowTitle" "")
-      throw "Failed to bring the target window ('$title') to the foreground (Windows foreground lock). Input was NOT sent. Try again, or pass a different window target."
+      $targetHandle=$target.Current.NativeWindowHandle
+      $foregroundHandle=[WindowsComputerUseNative]::GetForegroundWindow().ToInt64()
+      throw "ACTIVATION_REJECTED: Failed to bring the target window ('$title', HWND=$targetHandle, foreground=$foregroundHandle) to the foreground. Input was NOT sent. Reobserve before another action."
     }
   }
 }
@@ -1192,16 +1236,46 @@ function Get-Children {
   )
   $items = New-Object "System.Collections.Generic.List[System.Windows.Automation.AutomationElement]"
   try {
-    $condition = Get-ViewCondition -ViewMode $ViewMode -IncludeOffscreen $IncludeOffscreen
-    $collection = $Element.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+    # Enumerate raw children, then bridge non-control containers explicitly.
+    # Bound the traversal when bridging non-control containers.
+    $pending=New-Object System.Collections.Generic.Queue[object]
+    foreach($child in $Element.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)) { $pending.Enqueue(@{node=$child;depth=0}) }
+    $visited=0
+    while($pending.Count -gt 0 -and $visited -lt 600) {
+      $entry=$pending.Dequeue();$child=$entry.node;$visited++
+      $matches=$ViewMode -eq 'raw' -or ($ViewMode -eq 'control' -and $child.Current.IsControlElement) -or ($ViewMode -eq 'content' -and $child.Current.IsContentElement)
+      if($matches) { if($IncludeOffscreen -or -not $child.Current.IsOffscreen){$items.Add($child)} }
+      elseif($entry.depth -lt 20) { foreach($nested in $child.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)){$pending.Enqueue(@{node=$nested;depth=$entry.depth+1})} }
+    }
   } catch {
+    if ($null -ne $script:AccessibilityErrors) { $script:AccessibilityErrors.Add($_.Exception.GetType().Name) }
     return ,$items
   }
-  if ($null -eq $collection) { return ,$items }
-  for ($i = 0; $i -lt $collection.Count; $i++) {
-    $items.Add($collection.Item($i))
-  }
   return ,$items
+}
+
+function Get-BoundInputFocus {
+  param([long]$Hwnd)
+  $pidValue=[uint32]0
+  $thread=[WindowsComputerUseNative]::GetWindowThreadProcessId([IntPtr]$Hwnd,[ref]$pidValue)
+  $gui=New-Object WindowsComputerUseNative+GUITHREADINFO
+  $gui.cbSize=[Runtime.InteropServices.Marshal]::SizeOf($gui)
+  if (-not [WindowsComputerUseNative]::GetGUIThreadInfo($thread,[ref]$gui)) { return $null }
+  $belongs=$gui.hwndFocus -eq [IntPtr]$Hwnd -or [WindowsComputerUseNative]::IsChild([IntPtr]$Hwnd,$gui.hwndFocus)
+  $point=New-Object WindowsComputerUseNative+POINT
+  $hasCursor=[WindowsComputerUseNative]::GetCursorPos([ref]$point)
+  return @{nativeWindowHandle=$gui.hwndFocus.ToInt64();belongsToTarget=($belongs -and $hasCursor -and [WindowsComputerUseNative]::GetForegroundWindow() -eq [IntPtr]$Hwnd);cursor=@{x=$point.x;y=$point.y}}
+}
+
+function Assert-VisualFocus {
+  param([object]$InputObject)
+  Assert-TargetIsForeground $InputObject
+  $focus=Get-BoundInputFocus ([long](Get-Prop $InputObject 'nativeWindowHandle' 0))
+  if (!$focus.belongsToTarget -or $focus.nativeWindowHandle -ne [long](Get-Prop $InputObject 'expectedFocusHandle' 0)) { throw 'FOCUS_CHANGED: visual input focus changed. No text sent.' }
+  $cursor=Get-Prop $InputObject 'expectedCursor' $null
+  if ($null -eq $cursor -or $cursor.x -ne $focus.cursor.x -or $cursor.y -ne $focus.cursor.y) { throw 'FOCUS_CHANGED: cursor moved after the observed click. No text sent.' }
+  $uia=Invoke-Safe { [System.Windows.Automation.AutomationElement]::FocusedElement } $null
+  if ($uia -and $uia.Current.IsPassword) { throw 'Password entry is excluded.' }
 }
 
 function Convert-Tree {
@@ -1415,7 +1489,7 @@ function Move-ToPoint {
 }
 
 function Type-Text {
-  param([string]$Text, [bool]$RestoreClipboard = $true)
+  param([string]$Text, [bool]$RestoreClipboard = $true, [object]$VisualTarget = $null)
   $position = New-Object WindowsComputerUseNative+POINT
   if (-not [WindowsComputerUseNative]::GetCursorPos([ref]$position)) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: Windows input desktop is unavailable.' }
   Move-ToPoint -X $position.x -Y $position.y
@@ -1429,12 +1503,13 @@ function Type-Text {
     $hadText = $false
   }
 
-  [System.Windows.Forms.Clipboard]::SetText($Text)
-  Start-Sleep -Milliseconds 50
-  [System.Windows.Forms.SendKeys]::SendWait("^v")
-  Start-Sleep -Milliseconds 250
-
-  if ($RestoreClipboard) {
+  try {
+    [System.Windows.Forms.Clipboard]::SetText($Text)
+    Start-Sleep -Milliseconds 50
+    if ($null -ne $VisualTarget) { Assert-VisualFocus $VisualTarget }
+    if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','v'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: paste input was rejected; effects may already exist.' }
+    Start-Sleep -Milliseconds 250
+  } finally { if ($RestoreClipboard) {
     try {
       if ($null -ne $oldData) {
         [System.Windows.Forms.Clipboard]::SetDataObject($oldData, $true)
@@ -1444,7 +1519,7 @@ function Type-Text {
         [System.Windows.Forms.Clipboard]::Clear()
       }
     } catch { }
-  }
+  } }
 }
 
 function Convert-KeyChord {
@@ -1708,11 +1783,33 @@ function Get-TreeResult {
   $includeOffscreen = [bool](Get-Prop $InputObject "includeOffscreen" $false)
   $detailLevel = Get-DetailLevel $InputObject "compact"
   $root = Get-ScopeRoot $Scope $InputObject
+  $trace=[bool](Get-Prop $InputObject 'diagnostics' $false)
+  if($trace){[Console]::Error.WriteLine('snapshot:root')}
+  $script:AccessibilityErrors=New-Object System.Collections.Generic.List[string]
   Update-WindowCache $root
   Update-WindowIdentity $InputObject $root
   $prefix = if ($Scope -eq "desktop") { "root" } else { "active" }
   $count = 0
   $tree = Convert-Tree -Element $root -Path $prefix -Depth 0 -MaxDepth $MaxDepth -Count ([ref]$count) -MaxNodes $MaxNodes -ViewMode $viewMode -IncludeOffscreen $includeOffscreen -DetailLevel $detailLevel
+  if($trace){[Console]::Error.WriteLine('snapshot:tree')}
+  $focused=$null; $selectedText=$null
+  $direct=Invoke-Safe { [System.Windows.Automation.AutomationElement]::FocusedElement } $null
+  if($trace){[Console]::Error.WriteLine('snapshot:focus')}
+  if ($direct -and $direct.Current.ProcessId -eq $root.Current.ProcessId) {
+    $cursor=$direct; $walker=[System.Windows.Automation.TreeWalker]::RawViewWalker
+    for ($i=0;$cursor -and $i -lt 64;$i++) {
+      if ($cursor.Current.NativeWindowHandle -eq $root.Current.NativeWindowHandle) { $focused=Convert-ElementInfo -Element $direct -DetailLevel 'full';break }
+      $cursor=Invoke-Safe { $walker.GetParent($cursor) } $null
+    }
+    if($trace){[Console]::Error.WriteLine('snapshot:bound-focus')}
+    # Selection ranges in modern WinUI providers can terminate the .NET
+    # Framework UIA client. Read this optional field only for classic Edit.
+    if ($focused -and !$focused.isPassword -and $direct.Current.ClassName -eq 'Edit') {
+      $pattern=$null
+      if (Invoke-Safe { $direct.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern,[ref]$pattern) } $false) { $selectedText=Invoke-Safe { ($pattern.GetSelection() | ForEach-Object {$_.GetText(65536)}) -join '' } $null }
+    }
+  }
+  if($trace){[Console]::Error.WriteLine('snapshot:selection')}
   $stopwatch.Stop()
   return [ordered]@{
     ok = $true
@@ -1725,6 +1822,10 @@ function Get-TreeResult {
     durationMs = [int]$stopwatch.ElapsedMilliseconds
     tree = $tree
     windowBounds = Get-NativeWindowBounds -Hwnd (Invoke-Safe { [int64]$root.Current.NativeWindowHandle } 0)
+    focusedElement = $focused
+    selectedText = $selectedText
+    inputFocus = Get-BoundInputFocus (Invoke-Safe { [int64]$root.Current.NativeWindowHandle } 0)
+    accessibilityErrors = @($script:AccessibilityErrors.ToArray())
   }
 }
 
@@ -1745,7 +1846,7 @@ function Invoke-Action {
     if ($proc.StartTime.ToUniversalTime().Ticks.ToString() -ne [string](Get-Prop $inputObject 'processStartedAt' '')) { throw 'WINDOW_CHANGED: process identity changed.' }
     if ($Action -ne 'snapshot') {
       [void](Test-Failsafe)
-      Activate-TargetIfRequested $inputObject
+      if (-not ($Action -eq 'type_text' -and [bool](Get-Prop $inputObject 'visual' $false))) { Activate-TargetIfRequested $inputObject }
       Assert-TargetIsForeground $inputObject
     }
   } elseif ($Action -notin @('list_windows','list_apps','launch_app')) { throw 'A bound HWND/PID/start-time target is required.' }
@@ -1988,18 +2089,25 @@ function Invoke-Action {
       }
       $first = $path[0]
       $last = $path[$path.Count - 1]
+      if ($path.Count -eq 2) {
+        $route=New-Object System.Collections.Generic.List[object]
+        for ($i=0;$i -le 20;$i++) { $route.Add(@{x=[int][Math]::Round($first.x+($last.x-$first.x)*$i/20);y=[int][Math]::Round($first.y+($last.y-$first.y)*$i/20)}) }
+        $path=@($route.ToArray())
+      }
+      $delay=[Math]::Max(5,[Math]::Min(100,[int]((Get-Prop $inputObject 'durationMs' 350)/[Math]::Max(1,$path.Count-1))))
       foreach ($pt in $path) { Assert-PointInTarget $inputObject ([int]$pt.x) ([int]$pt.y) }
       Emit-DesktopActivity ([int]$first.x) ([int]$first.y)
-      [void][WindowsComputerUseNative]::SetCursorPos([int]$first.x, [int]$first.y)
+      Move-ToPoint ([int]$first.x) ([int]$first.y)
       Start-Sleep -Milliseconds 50
-      [void][WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32]$flags[0], 0)
+      if ([WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32]$flags[0], 0) -ne 1) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: drag press failed.' }
       try {
         foreach ($pt in $path) {
           Emit-DesktopActivity ([int]$pt.x) ([int]$pt.y)
-          [void][WindowsComputerUseNative]::SetCursorPos([int]$pt.x, [int]$pt.y)
-          Start-Sleep -Milliseconds 25
+          Assert-TargetIsForeground $inputObject
+          Move-ToPoint ([int]$pt.x) ([int]$pt.y)
+          Start-Sleep -Milliseconds $delay
         }
-      } finally { [void][WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32]$flags[1], 0) }
+      } finally { if ([WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32]$flags[1], 0) -ne 1) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: drag release failed; check mouse state.' } }
       return ([ordered]@{ ok = $true; action = "drag"; points = $path.Count; button = $button })
     }
     "scroll" {
@@ -2033,7 +2141,12 @@ function Invoke-Action {
       [void](Test-Failsafe)
       $method = [string](Get-Prop $inputObject "method" "clipboard")
       $text = [string](Get-Prop $inputObject "text" "")
-      if ([string]::IsNullOrWhiteSpace($text)) { throw "text is required." }
+      if ($text.Length -eq 0) { throw "text is required." }
+      if ([bool](Get-Prop $inputObject 'visual' $false)) {
+        Assert-VisualFocus $inputObject
+        Type-Text -Text $text -RestoreClipboard ([bool](Get-Prop $inputObject 'restoreClipboard' $true)) -VisualTarget $inputObject
+        return @{ok=$true;method='visual-clipboard-paste';verified=$false}
+      }
 
       # Background path: post WM_CHAR straight into the target window's
       # message queue — no clipboard, no foreground, no system input queue.
@@ -2120,9 +2233,8 @@ function Invoke-Action {
       }
       Activate-TargetIfRequested $inputObject
       Assert-TargetIsForeground $inputObject
-      $chord = Convert-KeyChord -Keys $keys
-      [System.Windows.Forms.SendKeys]::SendWait($chord)
-      return ([ordered]@{ ok = $true; action = "keypress"; keys = $keys; sendKeys = $chord; method = "sendkeys" })
+      if (-not [WindowsComputerUseNative]::SendKeyChord([string[]]$keys)) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: key input was rejected; effects may already exist.' }
+      return ([ordered]@{ ok = $true; action = "keypress"; keys = $keys; method = "sendinput-keys" })
     }
     "focus" {
       $elementId = [string](Get-Prop $inputObject "elementId" "")
@@ -2142,6 +2254,13 @@ function Invoke-Action {
         'select' { if ($el.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$pattern)) { $pattern.Select() } else { throw 'Selection pattern unavailable.' } }
         'expand' { if ($el.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)) { $pattern.Expand() } else { throw 'Expand pattern unavailable.' } }
         'collapse' { if ($el.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)) { $pattern.Collapse() } else { throw 'Collapse pattern unavailable.' } }
+        {$_ -in @('scroll_up','scroll_down','scroll_left','scroll_right')} {
+          if (-not $el.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)) { throw 'Scroll pattern unavailable.' }
+          $none=[System.Windows.Automation.ScrollAmount]::NoAmount
+          $inc=[System.Windows.Automation.ScrollAmount]::SmallIncrement
+          $dec=[System.Windows.Automation.ScrollAmount]::SmallDecrement
+          switch($requested) { 'scroll_up'{$pattern.Scroll($none,$dec)} 'scroll_down'{$pattern.Scroll($none,$inc)} 'scroll_left'{$pattern.Scroll($dec,$none)} 'scroll_right'{$pattern.Scroll($inc,$none)} }
+        }
         default { throw 'Unsupported semantic action.' }
       }
       $method = $requested
@@ -2166,8 +2285,10 @@ function Invoke-Action {
       $method = Set-ElementValue $el -Value $value
       if ($null -eq $method -and $fallback) {
         $el.SetFocus()
-        [System.Windows.Forms.SendKeys]::SendWait("^a")
-        Type-Text -Text $value -RestoreClipboard $restore
+        if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','a'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: select-all failed; effects may already exist.' }
+        if ($value.Length -eq 0) {
+          if (-not [WindowsComputerUseNative]::SendKeyChord(@('Backspace'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: empty replacement failed; effects may already exist.' }
+        } else { Type-Text -Text $value -RestoreClipboard $restore }
         $method = "FocusSelectAllTypeFallback"
       }
       if ($null -eq $method) { throw "Element has no ValuePattern and fallbackType is false." }
@@ -2409,6 +2530,8 @@ if ($Persistent) {
         error = $_.Exception.Message
         category = $_.CategoryInfo.Category.ToString()
         scriptStackTrace = $_.ScriptStackTrace
+        code = if ($_.Exception.Message -match '^([A-Z_]+):') { $Matches[1] } else { 'BACKEND_REJECTED' }
+        dispatched = -not ($_.Exception.Message -match '(?i)No (input|text|replacement) (was )?sent|input was NOT sent|^(FOCUS_CHANGED|CONTENT_CHANGED|WINDOW_CHANGED|POINT_OCCLUDED|POINT_OUTSIDE_TARGET):')
       }
     }
     $result["id"] = $id

@@ -55,7 +55,8 @@ export class ComputerUseWindows {
               // Preserve the actual action outcome even if visual delivery fails.
               value.image_delivery_error = error.message;
               const observation = this.controller.observations.get(value.observation_id || value.state?.observation_id);
-              if (observation) observation.shot = null;
+              if (observation) { observation.shot = null; delete observation.visualAnchor; }
+              if (value.state?.visual_input_ready) value.state.visual_input_ready=false;
               return JSON.stringify(value);
             }
           }

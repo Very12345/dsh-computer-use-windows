@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertApp, appName, validateKeys } from './policy.js';
 import { normalizeScreenshot, validRect } from './screenshot.js';
+import { stat } from 'node:fs/promises';
 
 const identifier = prefix => prefix + ':' + randomUUID();
 const fail = (code, message) => { const error = new Error(message); error.code = code; throw error; };
@@ -10,7 +11,7 @@ const identity = w => [w.nativeWindowHandle, w.processId, w.processStartedAt, ap
 
 /** One queue across all agents because they share one physical desktop. */
 export class DesktopController {
-  constructor(backend, { authorize = async () => {}, onObserve = async () => {}, onStop = () => {}, now = Date.now, ttlMs = 60000, verifyMs = 2500 } = {}) {
+  constructor(backend, { authorize = async () => {}, onObserve = async () => {}, onStop = () => {}, now = Date.now, ttlMs = 300000, verifyMs = 2500 } = {}) {
     this.backend = backend; this.authorize = authorize; this.now = now; this.ttlMs = ttlMs; this.verifyMs = verifyMs;
     this.onObserve = onObserve; this.onStop = onStop;
     this.windows = new Map(); this.observations = new Map(); this.apps = new Map(); this.epoch = 0; this.queue = Promise.resolve(); this.stopped = false; this.generation = 0;
@@ -70,7 +71,12 @@ export class DesktopController {
   }
   async launch(owner, app, exec) {
     return this.serialize(async () => {
-      const known = this.apps.get(String(app).toLowerCase());
+      let known = this.apps.get(String(app).toLowerCase());
+      if (!known && typeof app === 'string' && /^[a-z]:[\\/]/i.test(app) && /\.exe$/i.test(app)) {
+        assertApp(app);
+        if (!(await stat(app).catch(() => null))?.isFile()) fail('APP_UNKNOWN', 'Explicit executable path must name an existing local .exe file.');
+        known = { executable: app };
+      }
       if (!known) fail('APP_UNKNOWN', 'Select an app id returned by computer_list_apps; arbitrary commands and arguments are not accepted.');
       assertApp(known.executable); await this.authorize(appName(known.executable), exec, false, 'Launch desktop app'); exec.signal?.throwIfAborted();
       this.epoch++; this.observations.clear();
@@ -97,10 +103,11 @@ export class DesktopController {
     const walk = (node, depth = 0) => {
       if (!node) return; const index = elements.length;
       elements.push(node);
-      text.push(' '.repeat(depth * 2) + `[${index}] ${node.controlType || ''} ${node.name || ''}` + (node.hasKeyboardFocus ? ' [focused]' : '') + (node.isEnabled === false ? ' [disabled]' : ''));
+      text.push(' '.repeat(depth * 2) + `[${index}] ${node.controlType || ''} ${node.name || ''}` + (node.hasKeyboardFocus ? ' [focused]' : '') + (node.isEnabled === false ? ' [disabled]' : '') + (node.patterns?.length ? ` [patterns: ${node.patterns.join(', ')}]` : ''));
       for (const child of node.children || []) walk(child, depth + 1);
     };
     if (includeText) walk(raw.tree);
+    if (includeText && raw.focusedElement && !elements.some(e => e.id === raw.focusedElement.id)) walk(raw.focusedElement);
     let shot = null, screenshotError = '';
     if (raw.screenshot?.base64 && !raw.screenshot.occludedPossible && !raw.screenshot.windowCaptureFailed) {
       try { shot = normalizeScreenshot(raw.screenshot); } catch (error) { screenshotError = error.message; }
@@ -111,14 +118,14 @@ export class DesktopController {
     for (const [key, value] of this.observations) if (value.owner === owner && value.window === record.id) this.observations.delete(key);
     // Window enumeration and layout checks share Win32 bounds. A provider's UIA
     // root can exclude borders or report a different rectangle altogether.
-    const observed = { id, owner, window: record.id, epoch: this.epoch, time: this.now(), elements, rect: { ...(raw.windowBounds || record.raw.boundingBox) }, shot: usableImage ? { ...shot, base64: undefined } : null };
+    const observed = { id, owner, window: record.id, epoch: this.epoch, time: this.now(), elements, inputFocus: raw.inputFocus, rect: { ...(raw.windowBounds || record.raw.boundingBox) }, shot: usableImage ? { ...shot, base64: undefined } : null };
     this.observations.set(id, observed);
     for (const [key, value] of this.observations) if (this.now() - value.time > this.ttlMs) this.observations.delete(key);
     const focused = elements.find(e => e.hasKeyboardFocus && ['Document','Edit'].includes(e.controlType)) || elements.find(e => e.hasKeyboardFocus);
     const document = elements.find(e => ['Document', 'Edit'].includes(e.controlType));
     return {
       status: 'observed', window: { id: record.id, app: appName(record.raw.executable), title: raw.tree?.name || record.raw.name }, observation_id: id,
-      accessibility: includeText ? { tree: text.join('\n'), truncated: !!raw.truncated, focused_element: focused ? { index: elements.indexOf(focused), role: focused.controlType, name: focused.name } : null, document_text: document?.value ?? null } : null,
+      accessibility: includeText ? { tree: text.join('\n'), truncated: !!raw.truncated, focused_element: focused ? { index: elements.indexOf(focused), role: focused.controlType, name: focused.name } : null, document_text: document?.value ?? null, selected_text: raw.selectedText ?? null, selected_elements:elements.filter(e=>e.isSelected).map(e=>`[${elements.indexOf(e)}] ${e.controlType} ${e.name}`), diagnostics: raw.accessibilityErrors || [], elements:elements.map((e,index)=>({index,role:e.controlType,name:e.name,patterns:e.patterns || [],read_only:e.isReadOnly,focused:!!e.hasKeyboardFocus})) } : null,
       screenshot: usableImage ? { id, width: shot.width, height: shot.height, coordinate_space: 'screenshot_pixels', method: shot.method, path: shot.path } : null,
       ...(includeScreenshot && !usableImage ? { screenshot_error: screenshotError || 'No unobscured target screenshot. Bring the app forward and reobserve; coordinates are disabled.' } : {}),
       _image: usableImage ? { data: shot.base64, mediaType: 'image/png' } : null
@@ -145,6 +152,7 @@ export class DesktopController {
     return { x: Math.round(shot.origin.x + x / shot.scaleX + rect.x - observed.rect.x), y: Math.round(shot.origin.y + y / shot.scaleY + rect.y - observed.rect.y) };
   }
   unknown(error, action) {
+    if (error.dispatched===false) return {status:'rejected',action,error:{code:error.code || 'INPUT_REJECTED',message:error.message},next:'No input was sent. Obtain fresh state and resolve the reported condition before another action.'};
     return { status: 'outcome_unknown', action, error: { code: error.code || 'WINDOWS_ERROR', message: error.message }, next: 'Reobserve before retrying. A failed refresh does not mean the action was not applied.' };
   }
   async act(owner, action, args, exec) {
@@ -166,7 +174,16 @@ export class DesktopController {
         case 'type_text': {
           if (typeof args.text !== 'string' || !args.text.length || args.text.length > 20000) fail('INVALID_ARGUMENT', 'text must contain 1–20000 characters.');
           if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(args.text)) fail('INVALID_ARGUMENT', 'Use press_key for control characters.');
+          if (!['auto','uia','visual'].includes(args.input_mode || 'auto')) fail('INVALID_ARGUMENT','input_mode must be auto, uia or visual.');
           const focused = observed.elements.find(e => e.hasKeyboardFocus && ['Edit','Document'].includes(e.controlType));
+          if (args.input_mode === 'visual' || (!focused && args.input_mode !== 'uia')) {
+            const anchor = observed.visualAnchor;
+            if (!observed.shot || !anchor) fail('FOCUS_REQUIRED', 'A focused editable element or a fresh successful left click with a delivered screenshot is required. Inspect the clicked input surface before visual typing.');
+            if (!validRect(record.raw.boundingBox) || record.raw.boundingBox.width !== observed.rect.width || record.raw.boundingBox.height !== observed.rect.height) fail('LAYOUT_CHANGED','Window resized after visual focus. Click the input surface again.');
+            if (observed.elements.some(e => e.hasKeyboardFocus && e.isPassword)) fail('APP_DENIED','Password entry is excluded.');
+            operation='type_text';extra={text:args.text,method:'clipboard',restoreClipboard:true,visual:true,expectedFocusHandle:anchor.focusHandle,expectedCursor:anchor.cursor};
+            break;
+          }
           if (!focused) fail('FOCUS_REQUIRED', 'Observe accessibility with a focused editable element immediately before typing.');
           if (focused.isPassword) fail('APP_DENIED', 'Password entry is excluded.');
           operation = 'type_text'; extra = { text: args.text, method: 'clipboard', restoreClipboard: true, elementId: focused.id };
@@ -175,7 +192,7 @@ export class DesktopController {
         }
         case 'set_value': {
           const elementId = this.element(observed, args.element_index), element = observed.elements[args.element_index];
-          if (element.isPassword || !['Document','Edit'].includes(element.controlType)) fail('ELEMENT_NOT_EDITABLE','Choose an observed editable, non-password control.');
+          if (element.isPassword || element.isReadOnly === true || (!['Document','Edit'].includes(element.controlType) && !element.patterns?.includes('Value'))) fail('ELEMENT_NOT_EDITABLE','Choose an observed editable, non-password control with a writable value.');
           if (typeof args.value !== 'string' || args.value.length > 20000) fail('INVALID_ARGUMENT','value must be a string with at most 20000 characters.');
           operation = 'set_value'; extra = { elementId, value: args.value, expectedPriorValue: element.value }; expected = args.value; break;
         }
@@ -185,9 +202,15 @@ export class DesktopController {
           operation = 'drag'; extra = { path: [from, to], durationMs: 350 }; break;
         }
         case 'secondary_action': {
-          const map = { invoke: 'invoke', toggle: 'toggle', select: 'select', expand: 'expand', collapse: 'collapse' };
-          if (!map[String(args.action).toLowerCase()]) fail('INVALID_ARGUMENT', 'Use invoke, toggle, select, expand or collapse.');
-          operation = 'invoke'; extra = { elementId: this.element(observed, args.element_index), pattern: map[String(args.action).toLowerCase()] }; break;
+          const semantic = String(args.action).toLowerCase().replace(/\s+/g,'_');
+          const map = { invoke:'invoke',toggle:'toggle',select:'select',expand:'expand',collapse:'collapse',scroll_up:'scroll_up',scroll_down:'scroll_down',scroll_left:'scroll_left',scroll_right:'scroll_right' };
+          if (semantic==='raise') {
+            this.element(observed,args.element_index);
+            if (observed.elements[args.element_index].controlType!=='Window') fail('INVALID_ARGUMENT','Raise requires an observed Window element.');
+            operation='activate_window';break;
+          }
+          if (!map[semantic]) fail('INVALID_ARGUMENT', 'Unknown observed auxiliary action.');
+          operation = 'invoke'; extra = { elementId: this.element(observed, args.element_index), pattern: map[semantic] }; break;
         }
         case 'activate_window': operation = 'activate_window'; break;
         default: fail('INVALID_ARGUMENT', 'Unsupported desktop action.');
@@ -200,6 +223,13 @@ export class DesktopController {
       try {
         record = await this.resolve(owner, args.window, exec.signal);
         let state = await this.capture(owner, record, { include_screenshot: true, include_text: true }, exec.signal);
+        if (action==='click' && (args.mouse_button || 'left')==='left') {
+          const current=this.observations.get(state.observation_id);
+          if (current.shot && current.inputFocus?.belongsToTarget && current.inputFocus.nativeWindowHandle) {
+            current.visualAnchor={time:this.now(),focusHandle:current.inputFocus.nativeWindowHandle,cursor:current.inputFocus.cursor};
+            state.visual_input_ready=true;
+          }
+        }
         if (expected !== undefined) {
           const until = this.now() + this.verifyMs;
           const readValue = () => extra.elementId ? this.observations.get(state.observation_id)?.elements.find(e => e.id === extra.elementId)?.value : state.accessibility.document_text;
@@ -209,7 +239,7 @@ export class DesktopController {
           }
           return { status: readValue() === expected ? 'verified' : 'outcome_unknown', action, verification: { expected, actual: readValue() ?? null }, state, ...(readValue() !== expected ? { next: 'Input was dispatched. Inspect the refreshed state; do not blindly resend text.' } : {}) };
         }
-        return { status: 'dispatched', action, method: result.method || operation, state, note: 'Refreshed state is evidence; inspect it before deciding the next action.' };
+        return { status: 'dispatched', action, method: result.method || operation, state, ...(extra.visual ? { verification: { mode:'visual',verified:false }, note:'Text was dispatched to the visually focused surface. Inspect the refreshed screenshot; no text readback is available. Do not blindly resend.' } : { note:'Refreshed state is evidence; inspect it before deciding the next action.' }) };
       } catch (error) { return this.unknown(error, action); }
     }, exec.signal);
   }

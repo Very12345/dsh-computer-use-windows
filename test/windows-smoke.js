@@ -10,6 +10,7 @@ import { DesktopController } from '../src/controller.js';
 import { DesktopOverlay } from '../src/overlay.js';
 if(process.platform!=='win32')throw new Error('Windows desktop required');
 const overlay=new DesktopOverlay(),backend=new WindowsBackend({onActivity:event=>overlay.point(event)}),controller=new DesktopController(backend,{authorize:async(app)=>{assert.equal(app,'notepad.exe');},onObserve:(owner,rect,signal)=>overlay.show(owner,rect,signal),onStop:()=>overlay.hide()}),exec={agent:{id:'smoke'},signal:new AbortController().signal};
+const nativeRequest=backend.request.bind(backend);backend.request=(action,args,signal)=>nativeRequest(action,action==='snapshot'?{...args,diagnostics:true}:args,signal);
 let own;
 await fs.mkdir('.tmp',{recursive:true});
 const file=path.resolve('.tmp','dsh-cuw-smoke-'+randomUUID()+'.txt');await fs.writeFile(file,'');

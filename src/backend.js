@@ -32,7 +32,7 @@ export class WindowsBackend {
         if (reply.type === 'activity') { try { this.onActivity(reply); } catch {} continue; }
         const waiter = this.pending.get(reply.id); if (!waiter || waiter.proc !== proc) continue;
         waiter.cleanup();
-        if (reply.ok === false) waiter.reject(new BackendError('BACKEND_REJECTED', reply.error || 'Windows action failed.', true));
+        if (reply.ok === false) waiter.reject(new BackendError(reply.code || 'BACKEND_REJECTED', reply.error || 'Windows action failed.', reply.dispatched !== false));
         else waiter.resolve(reply);
       }
     });

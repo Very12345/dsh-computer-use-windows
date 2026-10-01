@@ -15,5 +15,5 @@ export function validateKeys(value) {
   const keys = String(value || '').split('+').map(s => s.trim()).filter(Boolean);
   if (!keys.length || keys.some(k => /^(?:win(?:dows)?|meta|super|cmd|command|os|lwin|rwin)$/i.test(k))) throw new Error('KEY_DENIED: Windows key combinations are excluded.');
   const aliases = { Control_L: 'Ctrl', Control_R: 'Ctrl', Control: 'Ctrl', Shift_L: 'Shift', Shift_R: 'Shift', Alt_L: 'Alt', Alt_R: 'Alt', Return: 'Enter', Escape: 'Escape', space: 'Space', BackSpace: 'Backspace', Delete: 'Delete', period:'.',comma:',',slash:'/',question:'?',greater:'>',less:'<',Left:'Left',Right:'Right',Up:'Up',Down:'Down',Page_Up:'PageUp',Page_Down:'PageDown',KP_Enter:'Enter' };
-  return keys.map(k => aliases[k] || k);
+  return keys.map(k => ['KP_Enter','Numpad_Enter'].includes(k)?'NumpadEnter':aliases[k] || (/^(?:KP_|Numpad_)([0-9])$/.test(k) ? 'Numpad'+k.at(-1) : ({KP_Add:'NumpadAdd',KP_Subtract:'NumpadSubtract',KP_Multiply:'NumpadMultiply',KP_Divide:'NumpadDivide',KP_Decimal:'NumpadDecimal',Numpad_Add:'NumpadAdd',Numpad_Subtract:'NumpadSubtract',Numpad_Multiply:'NumpadMultiply',Numpad_Divide:'NumpadDivide',Numpad_Decimal:'NumpadDecimal'}[k] || k)));
 }

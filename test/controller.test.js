@@ -68,3 +68,46 @@ test('malformed screenshot metadata disables coordinates with a useful error bef
     await assert.rejects(f.controller.act('a','click',{...input(f),x:10,y:10},f.exec),/usable screenshot/);assert.equal(f.backend.calls.some(c=>c.action==='click'),false);
   }
 });
+
+async function visualFixture(options={}) {
+ const f=await fixture(options);await withShot(f,raw=>{raw.tree.children[0].controlType='Pane';delete raw.tree.children[0].value;});return f;
+}
+test('visual text requires a successful click and reports dispatched without readback',async()=>{
+ const f=await visualFixture();await assert.rejects(f.controller.act('a','type_text',{...input(f),text:'x'},f.exec),/fresh successful left click/);
+ const clicked=await f.controller.act('a','click',{...input(f),x:50,y:50},f.exec);f.state=clicked.state;assert.equal(f.state.visual_input_ready,true);
+ const r=await f.controller.act('a','type_text',{...input(f),text:'视觉'},f.exec);assert.equal(r.status,'dispatched');assert.equal(r.verification.verified,false);assert.equal(r.verification.mode,'visual');assert.equal(f.backend.calls.find(c=>c.action==='type_text').args.expectedFocusHandle,102);
+});
+test('visual focus expires, is lost on reobservation, and cannot use an undelivered image',async()=>{
+ for(const mode of ['expiry','reobserve','unseen']){
+  let now=10;const f=await visualFixture({now:()=>now});f.state=(await f.controller.act('a','click',{...input(f),x:50,y:50},f.exec)).state;
+  if(mode==='expiry')now+=300001;
+  if(mode==='reobserve')f.state=await f.controller.observe('a',{window:f.window,include_text:true},f.exec);
+  if(mode==='unseen')f.controller.observations.get(f.state.observation_id).shot=null;
+  await assert.rejects(f.controller.act('a','type_text',{...input(f),text:'x'},f.exec),/fresh successful left click|expired/);assert.equal(f.backend.calls.some(c=>c.action==='type_text'),false);
+ }
+});
+test('right click cannot establish visual typing focus; explicit UIA mode keeps its gate',async()=>{
+ const f=await visualFixture();f.state=(await f.controller.act('a','click',{...input(f),x:50,y:50,mouse_button:'right'},f.exec)).state;
+ await assert.rejects(f.controller.act('a','type_text',{...input(f),text:'x'},f.exec),/fresh successful left click/);
+ f.state=(await f.controller.act('a','click',{...input(f),x:50,y:50},f.exec)).state;
+ await assert.rejects(f.controller.act('a','type_text',{...input(f),text:'x',input_mode:'uia'},f.exec),/focused editable/);
+});
+test('direct scoped focus and selection are included when tree limits omit them',async()=>{
+ const f=await fixture();await withShot(f,raw=>{raw.tree.children=[];raw.focusedElement={id:'focus:edit',name:'Direct edit',controlType:'Edit',hasKeyboardFocus:true,value:''};raw.selectedText='selected';raw.accessibilityErrors=['ProviderError'];});
+ assert.equal(f.state.accessibility.focused_element.name,'Direct edit');assert.equal(f.state.accessibility.selected_text,'selected');assert.deepEqual(f.state.accessibility.diagnostics,['ProviderError']);
+});
+test('Raise maps to window activation and rejects non-window elements',async()=>{
+ const f=await fixture();await assert.rejects(f.controller.act('a','secondary_action',{...input(f),element_index:1,action:'Raise'},f.exec),/Window element/);
+ const r=await f.controller.act('a','secondary_action',{...input(f),element_index:0,action:'Raise'},f.exec);assert.equal(r.status,'dispatched');assert.ok(f.backend.calls.some(c=>c.action==='activate_window'));
+});
+test('writable Value controls accept set_value while read-only controls do not',async()=>{
+ const f=await fixture();await withShot(f,raw=>{Object.assign(raw.tree.children[0],{controlType:'ComboBox',patterns:['Value'],isReadOnly:false});});
+ const r=await f.controller.act('a','set_value',{...input(f),element_index:1,value:'Beta'},f.exec);assert.equal(r.status,'verified');
+ f.state=r.state;f.controller.observations.get(f.state.observation_id).elements[1].isReadOnly=true;
+ await assert.rejects(f.controller.act('a','set_value',{...input(f),element_index:1,value:'Gamma'},f.exec),/writable value/);
+});
+test('known native pre-dispatch rejection remains distinct from uncertain input',async()=>{
+ const f=await fixture();const req=f.backend.request.bind(f.backend);f.backend.request=async(a,b,s)=>{if(a==='type_text'){const e=new Error('FOCUS_CHANGED: No text sent.');e.dispatched=false;e.code='FOCUS_CHANGED';throw e;}return req(a,b,s);};
+ const r=await f.controller.act('a','type_text',{...input(f),text:'x'},f.exec);assert.equal(r.status,'rejected');assert.match(r.next,/No input was sent/);assert.equal(f.backend.value,'');
+});
+test('numpad and punctuation aliases preserve physical key intent',()=>{assert.deepEqual(validateKeys('Control_L+KP_1'),['Ctrl','Numpad1']);assert.deepEqual(validateKeys('Numpad_Add'),['NumpadAdd']);assert.deepEqual(validateKeys('Control_L+Shift_L+period'),['Ctrl','Shift','.']);});
