@@ -1385,10 +1385,18 @@ function Get-ButtonFlags {
   }
 }
 
+function Emit-DesktopActivity {
+  param([int]$X,[int]$Y,[string]$Kind='move')
+  if (-not $Persistent) { return }
+  [Console]::Out.WriteLine((@{type='activity';action=$Kind;point=@{x=$X;y=$Y}} | ConvertTo-Json -Compress))
+  [Console]::Out.Flush()
+}
+
 function Click-At {
   param([int]$X, [int]$Y, [string]$Button = "left", [int]$Count = 1)
   $flags = Get-ButtonFlags $Button
   Move-ToPoint -X $X -Y $Y
+  Emit-DesktopActivity $X $Y 'click'
   Start-Sleep -Milliseconds 40
   for ($i = 0; $i -lt $Count; $i++) {
     if ([WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32]$flags[0], 0) -ne 1) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: Windows rejected mouse input.' }
@@ -1402,6 +1410,7 @@ function Click-At {
 
 function Move-ToPoint {
   param([int]$X, [int]$Y)
+  Emit-DesktopActivity $X $Y
   if (-not [WindowsComputerUseNative]::SetCursorPos($X, $Y)) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: Windows rejected cursor positioning. Restore the interactive desktop before retrying.' }
 }
 
@@ -1966,11 +1975,13 @@ function Invoke-Action {
       $first = $path[0]
       $last = $path[$path.Count - 1]
       foreach ($pt in $path) { Assert-PointInTarget $inputObject ([int]$pt.x) ([int]$pt.y) }
+      Emit-DesktopActivity ([int]$first.x) ([int]$first.y)
       [void][WindowsComputerUseNative]::SetCursorPos([int]$first.x, [int]$first.y)
       Start-Sleep -Milliseconds 50
       [void][WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32]$flags[0], 0)
       try {
         foreach ($pt in $path) {
+          Emit-DesktopActivity ([int]$pt.x) ([int]$pt.y)
           [void][WindowsComputerUseNative]::SetCursorPos([int]$pt.x, [int]$pt.y)
           Start-Sleep -Milliseconds 25
         }
@@ -1992,6 +2003,7 @@ function Invoke-Action {
       }
       if ($deltaY -ne 0 -or $deltaX -ne 0) {
         Assert-PointInTarget $inputObject $point.x $point.y
+        Emit-DesktopActivity $point.x $point.y
         [void][WindowsComputerUseNative]::SetCursorPos($point.x, $point.y)
         Start-Sleep -Milliseconds 30
         if ($deltaY -ne 0) {

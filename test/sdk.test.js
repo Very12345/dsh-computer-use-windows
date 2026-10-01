@@ -14,7 +14,7 @@ async function setup(t, overrides={}) {
   root.provide('llm',{resolveModelInfo:async()=>({inputModalities:['text','image']})});
   const pf=root.plugin(prompt.default),tf=root.plugin(tools.default),sf=root.plugin(skills.default);
   await Promise.all([pf.await(),tf.await(),sf.await()]);
-  const fiber=root.plugin(Plugin,{enabled:true,accessMode:'selected',allowedApps:['notepad.exe'],...overrides});await fiber.await();const plugin=root.get('computerUseWindows');config=plugin.config;
+  const fiber=root.plugin(Plugin,{enabled:true,showOverlay:false,accessMode:'selected',allowedApps:['notepad.exe'],...overrides});await fiber.await();const plugin=root.get('computerUseWindows');config=plugin.config;
   plugin.backend.close();plugin.controller.backend=new FakeBackend();
   t.after(async()=>{await fiber.dispose();await sf.dispose();await tf.dispose();await pf.dispose();});
   const agent={id:'sdk',options:{provider:'test',model:'vision'},session:{append(){}}};
@@ -75,4 +75,9 @@ test('stop wins over an already pending settings save',async(t)=>{
   settings.update=async(...args)=>{started();await pending;await update(...args);};
   const save=f.api({accessMode:'desktop'});await entered;const stop=await f.api({stop:true});assert.equal(stop.body.stopped,true);release();await save;assert.equal(f.plugin.controller.stopped,true);
   settings.update=update;const resume=await f.api({enabled:true});assert.equal(resume.body.stopped,false);
+});
+test('idle/stop hides only the matching agent desktop overlay',async(t)=>{
+  const f=await setup(t,{showOverlay:true});if(!f)return;const hidden=[];f.plugin.overlay.close();f.plugin.overlay={show:async()=>{},point(){},hide:owner=>hidden.push(owner),close(){}};
+  await f.root.emit('agent/status',{agent:f.agent,status:'idle'});assert.ok(hidden.includes(f.agent.id));
+  const reply=await f.api({showOverlay:false});assert.equal(reply.body.showOverlay,false);assert.ok(hidden.includes(undefined));
 });

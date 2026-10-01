@@ -33,3 +33,9 @@ No browser protocol, extension, DOM or browser input is included. Known browser,
 The plugin cannot infer every business consequence from a generic pixel click, and the model must classify consequential actions according to the injected skill. This is not an OS sandbox. App-catalog coverage and model visual reasoning differ from Codex; equivalent success rates require separate empirical evaluation.
 
 References: [OpenAI computer use overview](https://learn.chatgpt.com/docs/computer-use), [computer-use execution loop](https://developers.openai.com/api/docs/guides/tools-computer-use). Native source provenance and redistribution permission are recorded in NOTICE and native/LICENSE.
+
+## Desktop activity UI
+
+A separate STA helper displays non-activating, mouse-transparent monitor edges, a status banner, and an agent cursor indicator. It is per-monitor DPI aware. The input backend emits cursor/activity events separately from request replies; these events never settle or corrupt an action response. It does not create an independent virtual input desktop.
+
+The owner is the active observing agent. Turn completion/idle, manual stop, settings changes, and plugin disposal hide the UI; an idle expiry and parent-process check prevent abandoned indicators. Startup cancellation invalidates pending show calls, so a stopped task cannot display a delayed banner.

@@ -5,8 +5,9 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { WindowsBackend } from '../src/backend.js';
 import { DesktopController } from '../src/controller.js';
+import { DesktopOverlay } from '../src/overlay.js';
 if(process.platform!=='win32')throw new Error('Windows desktop required');
-const backend=new WindowsBackend(),controller=new DesktopController(backend,{authorize:async(app)=>{assert.equal(app,'notepad.exe');}}),exec={agent:{id:'smoke'},signal:new AbortController().signal};
+const overlay=new DesktopOverlay(),backend=new WindowsBackend({onActivity:event=>overlay.point(event)}),controller=new DesktopController(backend,{authorize:async(app)=>{assert.equal(app,'notepad.exe');},onObserve:(owner,rect,signal)=>overlay.show(owner,rect,signal),onStop:()=>overlay.hide()}),exec={agent:{id:'smoke'},signal:new AbortController().signal};
 let own;
 await fs.mkdir('.tmp',{recursive:true});
 const file=path.resolve('.tmp','dsh-cuw-smoke-'+randomUUID()+'.txt');await fs.writeFile(file,'');
@@ -32,4 +33,4 @@ try {
   assert.ok(saved.state.window.title.includes(path.basename(file)),'Must still be our own tab before closing');
   await controller.act('smoke','press_key',{window:own,observation_id:saved.state.observation_id,key:'Ctrl+w'},exec);own=null;
   await fs.writeFile('.tmp/smoke-result.json',JSON.stringify(summary,null,2));console.log(JSON.stringify(summary));
-} finally {if(own)console.error('Smoke did not complete; its dedicated test-file tab is left open for inspection.');controller.close();}
+} finally {if(own)console.error('Smoke did not complete; its dedicated test-file tab is left open for inspection.');controller.close();overlay.close();}

@@ -3,5 +3,6 @@
       name: '@very12345/dsh-computer-use-windows'
       config:
         enabled: true
+        showOverlay: true
         accessMode: desktop
         allowedApps: []

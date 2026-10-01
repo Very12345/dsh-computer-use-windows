@@ -9,8 +9,9 @@ const identity = w => [w.nativeWindowHandle, w.processId, w.processStartedAt, ap
 
 /** One queue across all agents because they share one physical desktop. */
 export class DesktopController {
-  constructor(backend, { authorize = async () => {}, now = Date.now, ttlMs = 60000, verifyMs = 2500 } = {}) {
+  constructor(backend, { authorize = async () => {}, onObserve = async () => {}, onStop = () => {}, now = Date.now, ttlMs = 60000, verifyMs = 2500 } = {}) {
     this.backend = backend; this.authorize = authorize; this.now = now; this.ttlMs = ttlMs; this.verifyMs = verifyMs;
+    this.onObserve = onObserve; this.onStop = onStop;
     this.windows = new Map(); this.observations = new Map(); this.apps = new Map(); this.epoch = 0; this.queue = Promise.resolve(); this.stopped = false; this.generation = 0;
   }
   serialize(fn, signal) {
@@ -90,6 +91,7 @@ export class DesktopController {
   async capture(owner, record, args, signal) {
     const includeScreenshot = args.include_screenshot !== false, includeText = args.include_text === true;
     const raw = await this.request('snapshot', { ...this.target(record), includeScreenshot, captureWindow: true, maxWidth: 1600, maxNodes: includeText ? 100 : 1, maxDepth: includeText ? 8 : 0, detailLevel: includeText ? 'full' : 'compact' }, signal);
+    await this.onObserve(owner, raw.tree?.boundingBox || record.raw.boundingBox, signal);
     const elements = [], text = [];
     const walk = (node, depth = 0) => {
       if (!node) return; const index = elements.length;
@@ -204,7 +206,7 @@ export class DesktopController {
       } catch (error) { return this.unknown(error, action); }
     }, exec.signal);
   }
-  stop() { this.stopped = true; this.generation++; this.epoch++; this.observations.clear(); return this.backend.stop(); }
+  stop() { this.stopped = true; this.generation++; this.epoch++; this.observations.clear(); this.onStop(); return this.backend.stop(); }
   resume() { this.stopped = false; }
   close() { this.stop(); this.windows.clear(); this.backend.close(); }
   releaseOwner(owner) { for (const [id,w] of this.windows) if (w.owner === owner) this.windows.delete(id); for (const [id,s] of this.observations) if (s.owner === owner) this.observations.delete(id); }

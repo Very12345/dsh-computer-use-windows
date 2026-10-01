@@ -8,8 +8,9 @@ export class BackendError extends Error {
 
 /** One owned STA process; cancellation destroys it and is never replayed. */
 export class WindowsBackend {
-  constructor({ spawnProcess = spawn, executable, script, timeoutMs = 45000 } = {}) {
+  constructor({ spawnProcess = spawn, executable, script, timeoutMs = 45000, onActivity = () => {} } = {}) {
     this.spawnProcess = spawnProcess;
+    this.onActivity = onActivity;
     this.executable = executable || path.join(process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
     this.script = script || fileURLToPath(new URL('../native/windows-uia.ps1', import.meta.url));
     this.timeoutMs = timeoutMs; this.sequence = 0; this.pending = new Map(); this.proc = null; this.tail = ''; this.closed = false; this.cleanup = Promise.resolve(); this.cleanupFailure = '';
@@ -28,6 +29,7 @@ export class WindowsBackend {
       while ((end = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, end).trim(); buffer = buffer.slice(end + 1); if (!line) continue;
         let reply; try { reply = JSON.parse(line); } catch { continue; }
+        if (reply.type === 'activity') { try { this.onActivity(reply); } catch {} continue; }
         const waiter = this.pending.get(reply.id); if (!waiter || waiter.proc !== proc) continue;
         waiter.cleanup();
         if (reply.ok === false) waiter.reject(new BackendError('BACKEND_REJECTED', reply.error || 'Windows action failed.', true));
