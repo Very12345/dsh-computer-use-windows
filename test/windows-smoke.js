@@ -9,7 +9,7 @@ import { WindowsBackend } from '../src/backend.js';
 import { DesktopController } from '../src/controller.js';
 import { DesktopOverlay } from '../src/overlay.js';
 if(process.platform!=='win32')throw new Error('Windows desktop required');
-const overlay=new DesktopOverlay(),backend=new WindowsBackend({onActivity:event=>overlay.point(event)}),controller=new DesktopController(backend,{authorize:async(app)=>{assert.equal(app,'notepad.exe');},onObserve:(owner,rect,signal)=>overlay.show(owner,rect,signal),onStop:()=>overlay.hide()}),exec={agent:{id:'smoke'},signal:new AbortController().signal};
+const overlay=new DesktopOverlay({onCancel:()=>controller.stop()}),backend=new WindowsBackend({onActivity:event=>overlay.point(event)}),controller=new DesktopController(backend,{authorize:async(app)=>{assert.equal(app,'notepad.exe');},onObserve:(owner,rect,signal)=>overlay.show(owner,rect,signal),onStop:()=>overlay.hide()}),exec={agent:{id:'smoke'},signal:new AbortController().signal};
 const nativeRequest=backend.request.bind(backend);backend.request=(action,args,signal)=>nativeRequest(action,action==='snapshot'?{...args,diagnostics:true}:args,signal);
 let own;
 await fs.mkdir('.tmp',{recursive:true});
@@ -48,6 +48,7 @@ try {
   backend.request=request;
   let state=await controller.observe('smoke',{window:own,include_text:true},exec);
   assert.equal(state.accessibility.document_text,'','Fixture must start empty');
+  const escaped=await controller.act('smoke','press_key',{window:own,observation_id:state.observation_id,key:'Escape'},exec);assert.equal(escaped.status,'dispatched',safe(escaped));assert.equal(controller.stopped,false,'Injected Escape must not trigger the physical stop hook');state=escaped.state;
   const editable=state.accessibility.tree.split('\n').find(line=>/\] Document /.test(line));assert.ok(editable,'Editable Document required');const index=Number(editable.match(/\[(\d+)\]/)[1]);
   const clicked=await controller.act('smoke','click',{window:own,observation_id:state.observation_id,element_index:index},exec);assert.equal(clicked.status,'dispatched',safe(clicked));state=clicked.state;
   const typed=await controller.act('smoke','type_text',{window:own,observation_id:state.observation_id,text:'hellowworl'},exec);assert.equal(typed.status,'verified',safe(typed));assert.equal(typed.verification.actual,'hellowworl');assert.equal(typed.state.window.id,own);

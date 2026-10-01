@@ -16,6 +16,7 @@ async function setup(t, overrides={}) {
   await Promise.all([pf.await(),tf.await(),sf.await()]);
   const fiber=root.plugin(Plugin,{enabled:true,showOverlay:false,accessMode:'selected',allowedApps:['notepad.exe'],...overrides});await fiber.await();const plugin=root.get('computerUseWindows');config=plugin.config;
   plugin.backend.close();plugin.controller.backend=new FakeBackend();
+  const onCancel=plugin.overlay.onCancel;plugin.overlay.close();plugin.overlay={onCancel,show:async()=>{},point(){},hide(){},close(){}};
   t.after(async()=>{await fiber.dispose();await sf.dispose();await tf.dispose();await pf.dispose();});
   const agent={id:'sdk',options:{provider:'test',model:'vision'},session:{append(){}}};
   const scope=(await import('@deepseek-ai/dsh-scope')).createScope(root,agent);agent.ctx=scope.ctx;t.after(()=>scope.dispose());
@@ -80,4 +81,11 @@ test('idle/stop hides only the matching agent desktop overlay',async(t)=>{
   const f=await setup(t,{showOverlay:true});if(!f)return;const hidden=[];f.plugin.overlay.close();f.plugin.overlay={show:async()=>{},point(){},hide:owner=>hidden.push(owner),close(){}};
   await f.root.emit('agent/status',{agent:f.agent,status:'idle'});assert.ok(hidden.includes(f.agent.id));
   const reply=await f.api({showOverlay:false});assert.equal(reply.body.showOverlay,false);assert.ok(hidden.includes(undefined));
+});
+
+test('Esc stops native input and wins against a pending settings save',async(t)=>{
+ const f=await setup(t,{showOverlay:false});if(!f)return;
+ const settings=f.root.get('settings'),update=settings.update.bind(settings);let release,entered;
+ const started=new Promise(r=>entered=r);settings.update=async(...args)=>{entered();await new Promise(r=>release=r);await update(...args);};
+ const save=f.api({accessMode:'desktop'});await started;await f.plugin.overlay.onCancel({reason:'physical_escape'});assert.equal(f.plugin.controller.stopped,true);assert.match(f.plugin.error,/Esc/);release();await save;assert.equal(f.plugin.controller.stopped,true);
 });

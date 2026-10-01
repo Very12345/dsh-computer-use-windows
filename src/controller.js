@@ -21,7 +21,7 @@ export class DesktopController {
     const run = this.queue.catch(() => {}).then(() => { signal?.throwIfAborted(); if (this.stopped || this.generation !== generation) fail('STOPPED', 'Computer use is stopped. Obtain fresh state after resuming.'); return fn(); });
     this.queue = run; return run;
   }
-  async request(action, args, signal) { signal?.throwIfAborted(); const result = await this.backend.request(action, args, signal); signal?.throwIfAborted(); return result; }
+  async request(action, args, signal) { const generation=this.generation;signal?.throwIfAborted(); const result = await this.backend.request(action, args, signal); signal?.throwIfAborted();if(this.stopped||this.generation!==generation)fail('STOPPED','Computer use was stopped during the request. Obtain fresh state after resuming.'); return result; }
   async enumerate(owner, signal) {
     const result = await this.request('list_windows', { maxWindows: 4096, includeInvisible: false }, signal);
     const windows = [];
@@ -96,9 +96,11 @@ export class DesktopController {
     return this.serialize(async () => { const record = await this.resolve(owner, args.window, exec.signal); await this.permitted(record, exec); return this.capture(owner, record, args, exec.signal); }, exec.signal);
   }
   async capture(owner, record, args, signal) {
+    const generation=this.generation;
     const includeScreenshot = args.include_screenshot !== false, includeText = args.include_text === true;
     const raw = await this.request('snapshot', { ...this.target(record), includeScreenshot, captureWindow: true, maxWidth: 1600, maxNodes: includeText ? 100 : 1, maxDepth: includeText ? 8 : 0, detailLevel: includeText ? 'full' : 'compact' }, signal);
     await this.onObserve(owner, raw.windowBounds || record.raw.boundingBox, signal);
+    if(this.stopped||this.generation!==generation)fail('STOPPED','Computer use was stopped during observation. Obtain fresh state after resuming.');
     const elements = [], text = [];
     const walk = (node, depth = 0) => {
       if (!node) return; const index = elements.length;

@@ -268,6 +268,7 @@ public static class WindowsComputerUseNative {
 
   [StructLayout(LayoutKind.Sequential)]
   public struct POINT { public int x; public int y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
   [DllImport("user32.dll")]
   public static extern bool GetCursorPos(out POINT p);
 
@@ -1380,14 +1381,15 @@ function Resolve-Element {
 function Assert-PointInTarget {
   param([object]$InputObject, [int]$X, [int]$Y)
   $target = Resolve-TargetWindow $InputObject
-  $el = [System.Windows.Automation.AutomationElement]::FromPoint((New-Object System.Windows.Point($X,$Y)))
-  if ($el.Current.ProcessId -ne $target.Current.ProcessId) { throw 'POINT_OCCLUDED: another app is over the target point. No input sent.' }
-  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-  $cursor = $el
-  while ($null -ne $cursor) {
-    if ($cursor.Current.NativeWindowHandle -eq $target.Current.NativeWindowHandle) { return }
-    $cursor = $walker.GetParent($cursor)
-  }
+  # UIA FromPoint can see our disabled, click-through indicator windows.
+  # Win32 hit testing skips disabled windows and reflects the input target.
+  $point=New-Object WindowsComputerUseNative+POINT;$point.x=$X;$point.y=$Y
+  $hit=[WindowsComputerUseNative]::WindowFromPoint($point)
+  $owner=[uint32]0
+  [void][WindowsComputerUseNative]::GetWindowThreadProcessId($hit,[ref]$owner)
+  if ($owner -ne $target.Current.ProcessId) { throw 'POINT_OCCLUDED: another app is over the target point. No input sent.' }
+  $bound=[IntPtr]([int64](Get-Prop $InputObject 'nativeWindowHandle' 0))
+  if($hit -eq $bound -or [WindowsComputerUseNative]::IsChild($bound,$hit)){return}
   throw 'POINT_OUTSIDE_TARGET: point belongs to another window. No input sent.'
 }
 

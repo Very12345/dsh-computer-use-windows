@@ -16,9 +16,9 @@ export class ComputerUseWindows {
   static Config = z.object({ enabled: z.boolean().default(true).volatile(), showOverlay: z.boolean().default(true).volatile(), accessMode: z.union(['desktop','selected']).default('desktop').volatile(), allowedApps: z.array(z.string()).default([]).volatile() });
   constructor(ctx, config) {
     this.ctx = ctx; this.config = config; this.grants = new Map(); this.error = ''; this.lastEnabled = this.enabled; this.manualStopEpoch = 0;
-    this.overlay = new DesktopOverlay();
-    this.backend = new WindowsBackend({ onActivity: event => { if(this.showOverlay)this.overlay.point(event); } });
-    this.controller = new DesktopController(this.backend, { authorize: (app, exec, consequential, reason) => this.authorize(app, exec, consequential, reason), onObserve: (owner,rect,signal) => this.showOverlay ? this.overlay.show(owner,rect,signal) : undefined, onStop: () => this.overlay.hide() });
+    this.overlay = new DesktopOverlay({onCancel:async event=>{this.manualStopEpoch++;this.error=event.reason==='physical_escape'?'Stopped with Esc. Resume in Computer Use settings.':'Esc listener unavailable. Computer use was stopped; resume in settings.';await this.controller.stop();}});
+    this.backend = new WindowsBackend({ onActivity: event => this.overlay.point(event) });
+    this.controller = new DesktopController(this.backend, { authorize: (app, exec, consequential, reason) => this.authorize(app, exec, consequential, reason), onObserve: (owner,rect,signal) => this.overlay.show(owner,rect,signal,this.showOverlay), onStop: () => this.overlay.hide() });
     ctx.effect(() => ctx.settings.configure({ auto: false }));
     ctx.provide('computerUseWindows', this);
     ctx.on('agent/disposed', ({ agent }) => { this.overlay.hide(agent.id);this.controller.releaseOwner(agent.id); this.grants.delete(agent.id); });

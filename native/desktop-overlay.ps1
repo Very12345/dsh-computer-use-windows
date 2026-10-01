@@ -1,5 +1,14 @@
 param([int]$ParentProcessId)
 $ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class OverlayDpiBootstrap {
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+}
+'@
+try { if(-not [OverlayDpiBootstrap]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))) { [void][OverlayDpiBootstrap]::SetProcessDPIAware() } } catch { [void][OverlayDpiBootstrap]::SetProcessDPIAware() }
 Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System,System.Core -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -24,7 +33,7 @@ public class DesktopOverlayForm : Form {
   [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc,IntPtr item);
   [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr item);
   [DllImport("user32.dll")] static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr dst,ref XY position,ref DIM size,IntPtr source,ref XY origin,int key,ref BLEND blend,int flags);
-  public void RenderWave(double time) {
+  public void RenderGlow() {
     if(!Visible||Width<1||Height<1)return;
     using(var bitmap=new Bitmap(Width,Height,PixelFormat.Format32bppPArgb)) {
       using(var g=Graphics.FromImage(bitmap)){
@@ -33,11 +42,9 @@ public class DesktopOverlayForm : Form {
         if(Kind=="edge-left"){g.TranslateTransform(0,Height);g.RotateTransform(-90);}
         if(Kind=="edge-right"){g.TranslateTransform(Width,0);g.RotateTransform(90);}
         g.ScaleTransform(UiScale,UiScale);float length=(Kind=="edge-left"||Kind=="edge-right"?Height:Width)/UiScale;
-        for(int layer=0;layer<2;layer++)using(var wave=new GraphicsPath()){
-          wave.AddLine(0,0,length,0);float oldY=0;
-          for(float x=length;x>=0;x-=2){float y=(float)(19-layer*3+Math.Sin(x/74+time*(layer==0?.45:-.32)+layer*1.6)*4+Math.Sin(x/149-time*.2)*1.4);if(x==length)wave.AddLine(length,0,x,y);else wave.AddLine(x+2,oldY,x,y);oldY=y;}
-          wave.AddLine(0,oldY,0,0);wave.CloseFigure();
-          using(var brush=new LinearGradientBrush(new RectangleF(0,0,length,32),Color.FromArgb(layer==0?100:72,layer==0?56:37,layer==0?189:99,layer==0?248:235),Color.FromArgb(16,59,130,246),90f))g.FillPath(brush,wave);
+        using(var brush=new LinearGradientBrush(new RectangleF(0,0,length,40),Color.RoyalBlue,Color.Transparent,90f)){
+          brush.InterpolationColors=new ColorBlend{Positions=new float[]{0,.04f,.15f,.42f,.72f,1},Colors=new Color[]{Color.FromArgb(180,32,139,255),Color.FromArgb(160,42,146,255),Color.FromArgb(110,53,153,255),Color.FromArgb(48,66,160,255),Color.FromArgb(13,79,168,255),Color.FromArgb(0,79,168,255)}};
+          g.FillRectangle(brush,0,0,length,40);
         }
       }
       IntPtr screen=GetDC(IntPtr.Zero),memory=CreateCompatibleDC(screen),image=bitmap.GetHbitmap(Color.FromArgb(0)),old=SelectObject(memory,image);
@@ -58,12 +65,12 @@ public class DesktopOverlayForm : Form {
     var blue=Color.FromArgb(59,130,246);
     if(Kind.StartsWith("edge-"))return;
     if(Kind=="banner"){
-      using(var outline=new GraphicsPath()) {int r=16;int width=(int)(Width/UiScale),height=(int)(Height/UiScale);outline.AddArc(0,0,r,r,180,90);outline.AddArc(width-r-1,0,r,r,270,90);outline.AddArc(width-r-1,height-r-1,r,r,0,90);outline.AddArc(0,height-r-1,r,r,90,90);outline.CloseFigure();using(var brush=new SolidBrush(Color.FromArgb(15,23,42)))g.FillPath(brush,outline);using(var pen=new Pen(blue,1.5f))g.DrawPath(pen,outline);}
+      using(var outline=new GraphicsPath()) {int r=16;int width=(int)(Width/UiScale),height=(int)(Height/UiScale);outline.AddArc(0,0,r,r,180,90);outline.AddArc(width-r-1,0,r,r,270,90);outline.AddArc(width-r-1,height-r-1,r,r,0,90);outline.AddArc(0,height-r-1,r,r,90,90);outline.CloseFigure();using(var brush=new LinearGradientBrush(new Rectangle(0,0,width,height),Color.FromArgb(18,145,249),Color.FromArgb(78,119,250),0f))g.FillPath(brush,outline);using(var pen=new Pen(Color.FromArgb(116,190,255),1f))g.DrawPath(pen,outline);}
       using(var font=new Font("Segoe UI",14,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(Color.White))using(var format=new StringFormat(StringFormat.GenericTypographic)){
-        const string text="DSH is using your computer";float width=Width/UiScale,height=Height/UiScale;
+        const string text="DSH is using your computer  \u00b7  Esc to cancel";float width=Width/UiScale,height=Height/UiScale;
         var textSize=g.MeasureString(text,font,new SizeF(1000,height),format);float groupWidth=28+8+textSize.Width;
         float left=(width-groupWidth)/2,top=(height-textSize.Height)/2;
-        var logoState=g.Save();g.TranslateTransform(left,(height-24)/2);g.ScaleTransform(28f/60f,24f/41.3594f);using(var logoBrush=new SolidBrush(Color.FromArgb(77,107,254)))g.FillPath(logoBrush,DesktopOverlay.Whale);g.Restore(logoState);
+        var logoState=g.Save();g.TranslateTransform(left,(height-24)/2);g.ScaleTransform(28f/60f,24f/41.3594f);using(var logoBrush=new SolidBrush(Color.White))g.FillPath(logoBrush,DesktopOverlay.Whale);g.Restore(logoState);
         g.DrawString(text,font,brush,new PointF(left+36,top),format);
       }
       return;
@@ -86,37 +93,63 @@ public static class DesktopOverlay {
   [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Point point,uint flags);
   [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor,int type,out uint x,out uint y);
   static float scale=1;
+  [StructLayout(LayoutKind.Sequential)] struct KEY {public uint vkCode,scanCode,flags,time;public UIntPtr extra;}
+  delegate IntPtr KeyboardCallback(int code,IntPtr message,IntPtr data);
+  [DllImport("user32.dll",SetLastError=true)] static extern IntPtr SetWindowsHookEx(int type,KeyboardCallback callback,IntPtr module,uint thread);
+  [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr hook);
+  [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr message,IntPtr data);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr GetModuleHandle(string name);
+  static IntPtr hook;static KeyboardCallback keyboardCallback;static Control dispatcher;
+  static bool active,visibleUi=true,consumeEscapeUp;static long epoch=-1,cancelledEpoch=-1;
+  public static bool IsPhysicalEscape(uint key,uint flags,int message){return key==27&&(flags&0x12)==0&&(message==0x100||message==0x104);}
+  static IntPtr Keyboard(int code,IntPtr message,IntPtr data) {
+    if(code>=0){var key=(KEY)Marshal.PtrToStructure(data,typeof(KEY));int msg=message.ToInt32();
+      if(key.vkCode==27&&(key.flags&0x12)==0){
+        if(consumeEscapeUp){if(msg==0x101||msg==0x105)consumeEscapeUp=false;return new IntPtr(1);}
+        if(active&&IsPhysicalEscape(key.vkCode,key.flags,msg)){
+          active=false;consumeEscapeUp=true;cancelledEpoch=epoch;until=DateTime.MinValue;
+          long cancelled=epoch;
+          dispatcher.BeginInvoke((Action)(()=>{Hide();ThreadPool.QueueUserWorkItem(_=>{Console.WriteLine("{\"type\":\"cancel\",\"reason\":\"physical_escape\",\"epoch\":"+cancelled+"}");Console.Out.Flush();});}));
+          return new IntPtr(1);
+        }
+      }
+    }
+    return CallNextHookEx(hook,code,message,data);
+  }
 
   static DesktopOverlayForm[] edges;static DesktopOverlayForm banner,cursor;static DateTime until=DateTime.MinValue,pulseUntil=DateTime.MinValue;
   static int Num(Dictionary<string,object> data,string key,int fallback) {object value;return data.TryGetValue(key,out value)?Convert.ToInt32(value):fallback;}
   static void Hide() {foreach(var form in edges)form.Hide();banner.Hide();cursor.Hide();}
   static void Apply(Dictionary<string,object> data) {
     object method;if(!data.TryGetValue("method",out method))return;
-    if(Convert.ToString(method)=="hide"){Hide();until=DateTime.MinValue;return;}
-    until=DateTime.UtcNow.AddSeconds(45);
+    long incoming=Num(data,"epoch",0);if(incoming<epoch)return;
+    if(Convert.ToString(method)=="hide"){epoch=incoming;active=false;Hide();until=DateTime.MinValue;return;}
+    if(incoming<=cancelledEpoch)return;
+    epoch=incoming;active=true;until=DateTime.UtcNow.AddMinutes(5);
+    object visibility;if(data.TryGetValue("visible",out visibility))visibleUi=Convert.ToBoolean(visibility);
     object rect;
     if(data.TryGetValue("rect",out rect)){
       var r=(Dictionary<string,object>)rect;var screen=Screen.FromRectangle(new Rectangle(Num(r,"x",0),Num(r,"y",0),Num(r,"width",1),Num(r,"height",1))).Bounds;
       uint dpiX,dpiY;try {if(GetDpiForMonitor(MonitorFromPoint(new Point(screen.Left+screen.Width/2,screen.Top+screen.Height/2),2),0,out dpiX,out dpiY)==0)scale=dpiX/96f;}catch{scale=1;}
-      int outside=(int)(14*scale),depth=(int)(32*scale);
-      edges[0].Bounds=new Rectangle(screen.Left,screen.Top-outside,screen.Width,depth);edges[1].Bounds=new Rectangle(screen.Left,screen.Bottom-depth+outside,screen.Width,depth);edges[2].Bounds=new Rectangle(screen.Left-outside,screen.Top,depth,screen.Height);edges[3].Bounds=new Rectangle(screen.Right-depth+outside,screen.Top,depth,screen.Height);
-      foreach(var edge in edges){edge.UiScale=scale;edge.Show();edge.RenderWave(DateTime.UtcNow.TimeOfDay.TotalSeconds);}
-      banner.UiScale=scale;cursor.UiScale=scale;banner.Bounds=new Rectangle(screen.Left+(screen.Width-(int)(314*scale))/2,screen.Top+(int)(20*scale),(int)(314*scale),(int)(40*scale));banner.Show();
+      int depth=(int)(40*scale);
+      edges[0].Bounds=new Rectangle(screen.Left,screen.Top,screen.Width,depth);edges[1].Bounds=new Rectangle(screen.Left,screen.Bottom-depth,screen.Width,depth);edges[2].Bounds=new Rectangle(screen.Left,screen.Top,depth,screen.Height);edges[3].Bounds=new Rectangle(screen.Right-depth,screen.Top,depth,screen.Height);
+      foreach(var edge in edges){edge.UiScale=scale;if(visibleUi){edge.Show();edge.RenderGlow();}else edge.Hide();}
+      banner.UiScale=scale;cursor.UiScale=scale;banner.Bounds=new Rectangle(screen.Left+(screen.Width-(int)(440*scale))/2,screen.Top+(int)(30*scale),(int)(440*scale),(int)(44*scale));if(visibleUi){banner.Show();banner.Invalidate();}else{banner.Hide();cursor.Hide();}
     }
     object point;
-    if(data.TryGetValue("point",out point)){
+    if(visibleUi&&data.TryGetValue("point",out point)){
       var p=(Dictionary<string,object>)point;cursor.Bounds=new Rectangle(Num(p,"x",0)-(int)(20*scale),Num(p,"y",0)-(int)(20*scale),(int)(64*scale),(int)(68*scale));cursor.Pulse=Convert.ToString(method)=="click";if(cursor.Pulse)pulseUntil=DateTime.UtcNow.AddMilliseconds(500);cursor.Show();cursor.Invalidate();
     }
   }
   public static void Run(int parent,string whaleFile) {
     LoadWhale(whaleFile);
-    try{SetProcessDpiAwarenessContext(new IntPtr(-4));}catch{SetProcessDPIAware();}
     edges=new DesktopOverlayForm[]{new DesktopOverlayForm("edge-top"),new DesktopOverlayForm("edge-bottom"),new DesktopOverlayForm("edge-left"),new DesktopOverlayForm("edge-right")};banner=new DesktopOverlayForm("banner");cursor=new DesktopOverlayForm("cursor");
     var control=new Control();var handle=control.Handle;var ctx=new ApplicationContext();
+    dispatcher=control;keyboardCallback=Keyboard;hook=SetWindowsHookEx(13,keyboardCallback,GetModuleHandle(null),0);if(hook==IntPtr.Zero)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"Could not install the physical Esc stop hook");
     var reader=new Thread(()=>{string line;while((line=Console.ReadLine())!=null){try{var data=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(line);control.BeginInvoke((Action)(()=>Apply(data)));}catch{}}try{control.BeginInvoke((Action)(()=>ctx.ExitThread()));}catch{}});reader.IsBackground=true;reader.Start();
-    var timer=new System.Windows.Forms.Timer();timer.Interval=80;timer.Tick+=(s,e)=>{foreach(var edge in edges)if(edge.Visible)edge.RenderWave(DateTime.UtcNow.TimeOfDay.TotalSeconds);if(DateTime.UtcNow>until)Hide();if(cursor.Pulse&&DateTime.UtcNow>pulseUntil){cursor.Pulse=false;cursor.Invalidate();}try{if(Process.GetProcessById(parent).HasExited)ctx.ExitThread();}catch{ctx.ExitThread();}};timer.Start();
+    var timer=new System.Windows.Forms.Timer();timer.Interval=80;timer.Tick+=(s,e)=>{if(DateTime.UtcNow>until){active=false;Hide();}if(cursor.Pulse&&DateTime.UtcNow>pulseUntil){cursor.Pulse=false;cursor.Invalidate();}try{using(var parentProcess=Process.GetProcessById(parent)){if(parentProcess.HasExited)ctx.ExitThread();}}catch{ctx.ExitThread();}};timer.Start();
     Console.WriteLine("{\"ready\":true}");Console.Out.Flush();
-    try{Application.Run(ctx);}finally{timer.Dispose();Hide();foreach(var form in edges)form.Dispose();banner.Dispose();cursor.Dispose();control.Dispose();Whale.Dispose();}
+    try{Application.Run(ctx);}finally{active=false;UnhookWindowsHookEx(hook);timer.Dispose();Hide();foreach(var form in edges)form.Dispose();banner.Dispose();cursor.Dispose();control.Dispose();Whale.Dispose();}
   }
 }
 '@

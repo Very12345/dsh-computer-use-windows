@@ -44,4 +44,8 @@ References: [OpenAI computer use overview](https://learn.chatgpt.com/docs/comput
 
 A separate STA helper displays non-activating, mouse-transparent monitor edges, a status banner, and an agent cursor indicator. It is per-monitor DPI aware. The input backend emits cursor/activity events separately from request replies; these events never settle or corrupt an action response. It does not create an independent virtual input desktop.
 
+The edges fade inward over 40 DIP. The centered 440 × 44 DIP blue banner includes the whale and an Esc cancellation hint. A low-level keyboard hook in the separate UI helper observes physical Esc only; injected keyboard events pass through. Cancellation hides UI, invalidates the display epoch and stops the controller/backend. Queued stale show commands cannot resurrect the UI, and pending observations cannot publish usable state after stop. The listener remains armed when the visual UI is disabled. Losing an active listener stops computer use.
+
+The helper handles the keyboard notification briefly and posts cancellation work to its message loop. See [LowLevelKeyboardProc](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc) and [KBDLLHOOKSTRUCT injected-event flags](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-kbdllhookstruct). It records no other key data.
+
 The owner is the active observing agent. Turn completion/idle, manual stop, settings changes, and plugin disposal hide the UI; an idle expiry and parent-process check prevent abandoned indicators. Startup cancellation invalidates pending show calls, so a stopped task cannot display a delayed banner.
