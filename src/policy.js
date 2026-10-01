@@ -4,7 +4,7 @@ const DENIED_APPS = new Set(['chrome.exe', 'msedge.exe', 'firefox.exe', 'brave.e
 export function appName(value) { return path.win32.basename(String(value || '')).toLowerCase(); }
 export function assertApp(value, title = '') {
   const app = appName(value);
-  if (!/^[a-z0-9][a-z0-9._ -]*\.exe$/.test(app) || DENIED_APPS.has(app) || /(?:password|credential|authentication|sign.?in|登录|密码|身份验证|Windows 安全中心)/i.test(title)) throw new Error('APP_DENIED: browser, terminal, authentication, security and password-manager surfaces are excluded.');
+  if (!/^(?![.\s])[^<>:"/\\|?*\u0000-\u001f]+\.exe$/i.test(app) || app.length > 255 || DENIED_APPS.has(app) || /(?:password|credential|authentication|sign.?in|登录|密码|身份验证|Windows 安全中心)/i.test(title)) throw new Error('APP_DENIED: browser, terminal, authentication, security and password-manager surfaces are excluded.');
   return app;
 }
 export function normalizeAllowedApps(values) {

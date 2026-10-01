@@ -8,7 +8,7 @@
 dsh plugin --profile desktop add github:Very12345/dsh-computer-use-windows --ignore-scripts
 ```
 
-安装后重启 DSH。在设置 → Windows Computer Use 开启插件；添加需要始终允许的应用，例如 `notepad.exe`。不在列表中的应用通过 DSH 请求当前会话授权。DSH 审批策略为 `never` 时，未授权应用会被拒绝。设置页有立即停止按钮。
+安装后重启 DSH，在设置 → 电脑操作中开启。默认允许所有普通桌面应用，无需逐个添加或授权；浏览器、终端和敏感应用仍被排除。也可切换到“仅预先授权的应用”，用应用列表逐项添加或移除。该模式下未添加的应用通过 DSH 请求会话授权，审批策略为 `never` 时会被拒绝。页面支持深浅色、窄屏、自动保存，以及独立的暂停与恢复。
 
 推荐卸载旧 `dsh-computer-use-win`，避免两套控制器。新插件开启时通过 DSH 工具守卫拒绝旧 `mcp__wincu__*` 调用。它不修改其他插件、模型、预设或 PowerShell/Git Bash 工具。
 
@@ -22,6 +22,7 @@ dsh plugin --profile desktop add github:Very12345/dsh-computer-use-windows --ign
 - `verified` 表示预期值已回读；`dispatched` 表示已投递并刷新，须检查界面；`outcome_unknown` 表示可能已产生效果，先观察再决定是否重试。
 - 截图作为 DSH 附件保存并发送给支持图像的模型，JSON 不携带 base64。文本模型仍可读取无障碍树，不能凭没有收到的截图猜坐标。
 - 原生系统提示及 `windows-desktop` 技能包含选择窗口、焦点检查、逐步操作、失败恢复及确认要求。
+- 普通桌面应用默认可用；收紧权限时可选择应用列表模式。中文可执行文件名也能识别。立即停止优先于尚未完成的设置保存，不会被较晚返回的保存请求自动恢复。
 
 ## 工具
 

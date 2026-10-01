@@ -1,18 +1,63 @@
 {
   "name": "@very12345/dsh-computer-use-windows",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Windows desktop computer use for DSH with bound windows, fresh observations and verified actions",
   "type": "module",
   "license": "MIT",
   "author": "Very12345",
-  "repository": { "type": "git", "url": "git+https://github.com/Very12345/dsh-computer-use-windows.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Very12345/dsh-computer-use-windows.git"
+  },
   "main": "./src/index.js",
-  "exports": { ".": "./src/index.js", "./client": "./src/client.js", "./package.json": "./package.json" },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings"] } },
-  "files": ["src", "native", "skills", "docs", "cordis.patch.yml", "README.md", "LICENSE", "NOTICE"],
-  "scripts": { "test": "node --test test/*.test.js", "verify": "npm test", "smoke": "node test/windows-smoke.js", "setup-sdk": "node test/install-sdk.js" },
-  "engines": { "node": ">=22" },
-  "os": ["win32"],
-  "peerDependencies": { "@deepseek-ai/dsh-tools": "^0.2.0-rc.2", "@deepseek-ai/schemastery": "^3.18.4" },
-  "peerDependenciesMeta": { "@deepseek-ai/dsh-tools": { "optional": true }, "@deepseek-ai/schemastery": { "optional": true } }
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "files": [
+    "src",
+    "native",
+    "skills",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "verify": "npm test",
+    "smoke": "node test/windows-smoke.js",
+    "setup-sdk": "node test/install-sdk.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "win32"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  }
 }

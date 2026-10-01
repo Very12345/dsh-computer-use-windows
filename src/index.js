@@ -12,15 +12,15 @@ export const SKILL = readFileSync(new URL('../skills/SKILL.md', import.meta.url)
 
 export class ComputerUseWindows {
   static inject = ['tools','systemPrompt','settings'];
-  static Config = z.object({ enabled: z.boolean().default(true).volatile(), allowedApps: z.array(z.string()).default([]).volatile() });
+  static Config = z.object({ enabled: z.boolean().default(true).volatile(), accessMode: z.union(['desktop','selected']).default('desktop').volatile(), allowedApps: z.array(z.string()).default([]).volatile() });
   constructor(ctx, config) {
-    this.ctx = ctx; this.config = config; this.grants = new Map(); this.error = ''; this.lastEnabled = this.enabled;
+    this.ctx = ctx; this.config = config; this.grants = new Map(); this.error = ''; this.lastEnabled = this.enabled; this.manualStopEpoch = 0;
     this.backend = new WindowsBackend();
     this.controller = new DesktopController(this.backend, { authorize: (app, exec, consequential, reason) => this.authorize(app, exec, consequential, reason) });
     ctx.effect(() => ctx.settings.configure({ auto: false }));
     ctx.provide('computerUseWindows', this);
     ctx.on('agent/disposed', ({ agent }) => { this.controller.releaseOwner(agent.id); this.grants.delete(agent.id); });
-    ctx.on('settings/document-updated', namespace => { if (namespace === 'computer-use-windows') { const active = !this.controller.stopped; this.grants.clear(); this.controller.stop(); if (this.enabled && (active || !this.lastEnabled)) this.controller.resume(); this.lastEnabled = this.enabled; } });
+    ctx.on('settings/document-updated', namespace => { if (namespace === 'computer-use-windows') { const active = !this.controller.stopped; this.grants.clear(); this.controller.stop(); if (this.enabled && active) this.controller.resume(); this.lastEnabled = this.enabled; } });
     ctx.effect(() => () => this.controller.close());
     if (!this.enabled) this.controller.stop();
     ctx.effect(() => ctx.systemPrompt.section({ name: 'computer-use-windows:workflow', order: 920, text: () => this.enabled && process.platform === 'win32' ? SKILL : '' }));
@@ -35,6 +35,7 @@ export class ComputerUseWindows {
         execute: async (args, exec) => {
           if (process.platform !== 'win32') throw new Error('Windows desktop required.');
           if (!this.enabled && method !== 'stop') throw new Error('Computer use is disabled in settings.');
+          if (method === 'stop') this.manualStopEpoch++;
           const { value, image } = separateImage(await dispatch(this.controller, method, args, exec));
           const text = JSON.stringify(value);
           if (image) {
@@ -63,17 +64,18 @@ export class ComputerUseWindows {
     ctx.effect(() => ctx.tools.guard(exec => exec.name?.startsWith('mcp__wincu__') && this.enabled ? 'Use computer_* from the Windows desktop plugin; the old wincu controller is superseded.' : undefined));
   }
   get enabled() { return valueOf(this.config.enabled) === true; }
+  get accessMode() { return valueOf(this.config.accessMode) || 'desktop'; }
   get allowedApps() { return normalizeAllowedApps(valueOf(this.config.allowedApps) || []); }
   async authorize(app, exec, consequential, reason) {
     const owner = exec.agent?.id || 'host';
-    if (!consequential && (this.allowedApps.includes(app) || this.grants.get(owner)?.has(app))) return;
+    if (!consequential && (this.accessMode === 'desktop' || this.allowedApps.includes(app) || this.grants.get(owner)?.has(app))) return;
     const approval = this.ctx.get('approval');
     if (!exec.agent || !approval) throw new Error('APP_APPROVAL_REQUIRED: allow ' + app + ' in Computer Use settings, or enable DSH native approval.');
     const outcome = await approval.request({ agent: exec.agent, callId: exec.callId, toolName: 'computer_use_windows', signal: exec.signal, reason: consequential ? `Windows 操作需要确认：${reason}（${app}）` : `允许此会话使用 Windows 桌面应用 ${app}？` });
     if (outcome !== 'allowed-once') throw new Error('APP_APPROVAL_REJECTED: ' + outcome);
     if (!consequential) { if (!this.grants.has(owner)) this.grants.set(owner,new Set()); this.grants.get(owner).add(app); }
   }
-  status() { return { ok: true, enabled: this.enabled, stopped: this.controller.stopped, supported: process.platform === 'win32', allowedApps: this.allowedApps, error: this.error }; }
+  status() { return { ok: true, enabled: this.enabled, stopped: this.controller.stopped, supported: process.platform === 'win32', accessMode: this.accessMode, allowedApps: this.allowedApps, error: this.error }; }
   routes(ctx) {
     const send = (res, status, data) => { res.writeHead(status, { 'Content-Type':'application/json', 'Cache-Control':'no-store' }); res.end(JSON.stringify(data)); };
     ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: ROUTE, handler: async (req, res) => {
@@ -82,13 +84,15 @@ export class ComputerUseWindows {
       try {
         let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 8192) throw new Error('Request too large'); }
         const input = JSON.parse(raw || '{}');
-        if (input.stop === true) { await this.controller.stop(); return send(res,200,this.status()); }
+        if (input.stop === true) { this.manualStopEpoch++; await this.controller.stop(); return send(res,200,this.status()); }
         const update = {};
         if (input.enabled !== undefined) { if (typeof input.enabled !== 'boolean') throw new Error('enabled must be boolean'); update.enabled = input.enabled; }
+        if (input.accessMode !== undefined) { if (!['desktop','selected'].includes(input.accessMode)) throw new Error('Unknown application access mode'); update.accessMode = input.accessMode; }
         if (input.allowedApps !== undefined) update.allowedApps = normalizeAllowedApps(input.allowedApps);
         const resume = input.enabled === true || (input.enabled !== false && !this.controller.stopped);
+        const stopEpoch = this.manualStopEpoch;
         await this.ctx.settings.update('computer-use-windows', update);
-        this.grants.clear(); await this.controller.stop(); if (this.enabled && resume) this.controller.resume(); this.lastEnabled = this.enabled; this.error = '';
+        this.grants.clear(); await this.controller.stop(); if (this.enabled && resume && this.manualStopEpoch === stopEpoch) this.controller.resume(); this.lastEnabled = this.enabled; this.error = '';
         return send(res,200,this.status());
       } catch (error) { this.error = error.message; return send(res,400,{ ...this.status(),ok:false }); }
     } }));

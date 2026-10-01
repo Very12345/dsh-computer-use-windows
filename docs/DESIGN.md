@@ -28,7 +28,7 @@ Screenshots stay out of canonical JSON. The host verifies image capability, save
 
 ## Boundaries
 
-No browser protocol, extension, DOM or browser input is included. Known browser, terminal, credential, password-manager, security and locked-desktop surfaces are denied. App approval is session-scoped unless the user saves an executable name in settings. Consequential actions require DSH action-time confirmation.
+No browser protocol, extension, DOM or browser input is included. Known browser, terminal, credential, password-manager, security and locked-desktop surfaces are denied. Normal desktop apps are available by default. Optional selected-app mode uses session-scoped app approval unless the user saves an executable name in settings. Consequential actions require DSH action-time confirmation.
 
 The plugin cannot infer every business consequence from a generic pixel click, and the model must classify consequential actions according to the injected skill. This is not an OS sandbox. App-catalog coverage and model visual reasoning differ from Codex; equivalent success rates require separate empirical evaluation.
 
