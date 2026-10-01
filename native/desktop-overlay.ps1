@@ -59,8 +59,13 @@ public class DesktopOverlayForm : Form {
     if(Kind.StartsWith("edge-"))return;
     if(Kind=="banner"){
       using(var outline=new GraphicsPath()) {int r=16;int width=(int)(Width/UiScale),height=(int)(Height/UiScale);outline.AddArc(0,0,r,r,180,90);outline.AddArc(width-r-1,0,r,r,270,90);outline.AddArc(width-r-1,height-r-1,r,r,0,90);outline.AddArc(0,height-r-1,r,r,90,90);outline.CloseFigure();using(var brush=new SolidBrush(Color.FromArgb(15,23,42)))g.FillPath(brush,outline);using(var pen=new Pen(blue,1.5f))g.DrawPath(pen,outline);}
-      var logoState=g.Save();g.TranslateTransform(12,8);g.ScaleTransform(28f/60f,24f/41.3594f);using(var brush=new SolidBrush(Color.FromArgb(77,107,254)))g.FillPath(brush,DesktopOverlay.Whale);g.Restore(logoState);
-      using(var font=new Font("Segoe UI",14,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(Color.White))g.DrawString("DSH is using your computer",font,brush,46,10);
+      using(var font=new Font("Segoe UI",14,FontStyle.Regular,GraphicsUnit.Pixel))using(var brush=new SolidBrush(Color.White))using(var format=new StringFormat(StringFormat.GenericTypographic)){
+        const string text="DSH is using your computer";float width=Width/UiScale,height=Height/UiScale;
+        var textSize=g.MeasureString(text,font,new SizeF(1000,height),format);float groupWidth=28+8+textSize.Width;
+        float left=(width-groupWidth)/2,top=(height-textSize.Height)/2;
+        var logoState=g.Save();g.TranslateTransform(left,(height-24)/2);g.ScaleTransform(28f/60f,24f/41.3594f);using(var logoBrush=new SolidBrush(Color.FromArgb(77,107,254)))g.FillPath(logoBrush,DesktopOverlay.Whale);g.Restore(logoState);
+        g.DrawString(text,font,brush,new PointF(left+36,top),format);
+      }
       return;
     }
     if(Pulse){using(var pen=new Pen(blue,2.5f))g.DrawEllipse(pen,4,4,32,32);}
