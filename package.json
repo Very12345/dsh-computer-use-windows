@@ -1,6 +1,6 @@
 {
   "name": "@very12345/dsh-computer-use-windows",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Windows desktop computer use for DSH with bound windows, fresh observations and verified actions",
   "type": "module",
   "license": "MIT",
@@ -34,7 +34,8 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "assets/settings-icon.svg"
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
