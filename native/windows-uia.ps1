@@ -100,6 +100,9 @@ public static class WindowsComputerUseNative {
   [DllImport("user32.dll")]
   public static extern bool SetCursorPos(int X, int Y);
 
+  [DllImport("user32.dll")]
+  public static extern uint GetClipboardSequenceNumber();
+
   public const int MOUSEEVENTF_MOVE = 0x0001;
   public const int MOUSEEVENTF_LEFTDOWN = 0x0002;
   public const int MOUSEEVENTF_LEFTUP = 0x0004;
@@ -1491,37 +1494,99 @@ function Move-ToPoint {
 }
 
 function Type-Text {
-  param([string]$Text, [bool]$RestoreClipboard = $true, [object]$VisualTarget = $null)
+  param([string]$Text, [bool]$RestoreClipboard = $true, [object]$VisualTarget = $null,
+    [object]$Editable = $null, [object]$InputTarget = $null, [bool]$Replace = $false)
   $position = New-Object WindowsComputerUseNative+POINT
   if (-not [WindowsComputerUseNative]::GetCursorPos([ref]$position)) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: Windows input desktop is unavailable.' }
   Move-ToPoint -X $position.x -Y $position.y
-  $hadText = $false
-  $oldText = $null
-  try {
-    $oldData = [System.Windows.Forms.Clipboard]::GetDataObject()
-    $hadText = [System.Windows.Forms.Clipboard]::ContainsText()
-    if ($hadText) { $oldText = [System.Windows.Forms.Clipboard]::GetText() }
-  } catch {
-    $hadText = $false
-  }
-
-  try {
-    [System.Windows.Forms.Clipboard]::SetText($Text)
-    Start-Sleep -Milliseconds 50
-    if ($null -ne $VisualTarget) { Assert-VisualFocus $VisualTarget }
-    if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','v'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: paste input was rejected; effects may already exist.' }
-    Start-Sleep -Milliseconds 250
-  } finally { if ($RestoreClipboard) {
-    try {
-      if ($null -ne $oldData) {
-        [System.Windows.Forms.Clipboard]::SetDataObject($oldData, $true)
-      } elseif ($hadText) {
-        [System.Windows.Forms.Clipboard]::SetText($oldText)
-      } else {
-        [System.Windows.Forms.Clipboard]::Clear()
+  $oldData = $null; $oldKnown = $false
+  # An IDataObject obtained from OLE may lazily refer to the live clipboard.
+  # Materialize its formats before writing, rather than keeping that proxy.
+  if ($RestoreClipboard -and $null -ne $Editable) { try {
+    $previous = [System.Windows.Forms.Clipboard]::GetDataObject()
+    if ($null -ne $previous) {
+      $oldData = New-Object System.Windows.Forms.DataObject
+      foreach ($format in $previous.GetFormats($false)) {
+        $data = $previous.GetData($format, $false)
+        if ($null -ne $data) { $oldData.SetData($format, $false, $data) }
       }
-    } catch { }
-  } }
+    }
+    $oldKnown = $true
+  } catch { $oldData = $null } }
+  $before = if ($null -ne $Editable) { Get-ValueText $Editable } else { $null }
+  $written = $false; $pasteAttempted = $false; $sequence = 0
+  $info = [ordered]@{ write_verified=$false; format='UnicodeText'; target_text_observed=$false; restored=$false; retained=$false; restore_reason='not_requested' }
+  try {
+    $payload = New-Object System.Windows.Forms.DataObject
+    $payload.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $false, $Text)
+    # copy=true flushes the OLE data so it survives a cancelled worker. The
+    # bounded retries are clipboard-lock retries only; input is never replayed.
+    try { [System.Windows.Forms.Clipboard]::SetDataObject($payload, $true, 3, 80) }
+    catch { throw 'CLIPBOARD_WRITE_FAILED: Windows refused the clipboard write. No text sent.' }
+    $written = $true
+    $sequence = [WindowsComputerUseNative]::GetClipboardSequenceNumber()
+    $until = [DateTime]::UtcNow.AddMilliseconds(1000)
+    do {
+      if ([WindowsComputerUseNative]::GetClipboardSequenceNumber() -ne $sequence) {
+        throw 'CLIPBOARD_CHANGED: Clipboard ownership changed before paste. No text sent.'
+      }
+      try { $readback = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::UnicodeText) } catch { $readback = $null }
+      if ([string]::Equals($readback, $Text, [StringComparison]::Ordinal)) { $info.write_verified = $true; break }
+      Start-Sleep -Milliseconds 40
+    } while ([DateTime]::UtcNow -lt $until)
+    if (-not $info.write_verified) { throw 'CLIPBOARD_VERIFY_FAILED: Clipboard text did not match the requested text. No text sent.' }
+    [void](Test-Failsafe)
+    if ($null -ne $VisualTarget) { Assert-VisualFocus $VisualTarget }
+    if ($null -ne $InputTarget) { Assert-TargetIsForeground $InputTarget }
+    if ($null -ne $Editable -and (-not $Editable.Current.HasKeyboardFocus -or $Editable.Current.IsPassword)) {
+      throw 'FOCUS_CHANGED: Editable focus changed before paste. No text sent.'
+    }
+    if ($null -ne $Editable -and $null -ne $InputTarget) {
+      $prior = Get-Prop $InputTarget 'expectedPriorValue' $null
+      if ($null -ne $prior -and (Get-ValueText $Editable) -cne [string]$prior) {
+        throw 'CONTENT_CHANGED: Editable content changed during clipboard preparation. No text sent.'
+      }
+    }
+    if ([WindowsComputerUseNative]::GetClipboardSequenceNumber() -ne $sequence) {
+      throw 'CLIPBOARD_CHANGED: Clipboard ownership changed before paste. No text sent.'
+    }
+    if ($Replace) {
+      if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','a'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: select-all failed; effects may already exist.' }
+      if ([WindowsComputerUseNative]::GetClipboardSequenceNumber() -ne $sequence -or -not $Editable.Current.HasKeyboardFocus) {
+        throw 'INPUT_STATE_UNKNOWN: Clipboard or focus changed after selection. Paste was not dispatched; selection effects may already exist.'
+      }
+    }
+    $pasteAttempted = $true
+    if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','v'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: paste input was rejected; effects may already exist.' }
+    if ($null -ne $Editable) {
+      $until = [DateTime]::UtcNow.AddMilliseconds(2000)
+      do {
+        [void](Test-Failsafe)
+        try { $actual = Get-ValueText $Editable } catch { $actual = $null }
+        $newText = $null -ne $before -and ($Replace -or $before.IndexOf($Text, [StringComparison]::Ordinal) -lt 0)
+        $textMatches = $null -ne $actual -and $(if ($Replace) { [string]::Equals($actual, $Text, [StringComparison]::Ordinal) } else { $actual.IndexOf($Text, [StringComparison]::Ordinal) -ge 0 })
+        if ($newText -and $textMatches -and $actual -cne $before) {
+          $info.target_text_observed = $true; break
+        }
+        Start-Sleep -Milliseconds 40
+      } while ([DateTime]::UtcNow -lt $until)
+    } else {
+      # A custom editor can read CF_UNICODETEXT asynchronously after Ctrl+V.
+      # A short sleep is not proof that it consumed the data. Keep the intended
+      # payload available instead of pasting an empty/private prior clipboard.
+      Start-Sleep -Milliseconds 250
+    }
+  } finally {
+    $ownsClipboard = $written -and [WindowsComputerUseNative]::GetClipboardSequenceNumber() -eq $sequence
+    if ($ownsClipboard -and $oldKnown -and (-not $pasteAttempted -or $info.target_text_observed)) { try {
+      if ($null -ne $oldData) { [System.Windows.Forms.Clipboard]::SetDataObject($oldData, $true, 3, 80) }
+      else { [System.Windows.Forms.Clipboard]::Clear() }
+      $info.restored = $true
+    } catch { } }
+    $info.retained = $ownsClipboard -and -not $info.restored
+    $info.restore_reason = if ($info.restored) { if ($pasteAttempted) { 'target_text_observed' } else { 'no_paste_dispatched' } } elseif ($written -and -not $ownsClipboard) { 'clipboard_changed_externally' } elseif ($pasteAttempted -and -not $info.target_text_observed) { 'target_read_unconfirmed' } elseif (-not $RestoreClipboard) { 'not_requested' } else { 'previous_clipboard_unavailable' }
+  }
+  return $info
 }
 
 function Convert-KeyChord {
@@ -2146,8 +2211,8 @@ function Invoke-Action {
       if ($text.Length -eq 0) { throw "text is required." }
       if ([bool](Get-Prop $inputObject 'visual' $false)) {
         Assert-VisualFocus $inputObject
-        Type-Text -Text $text -RestoreClipboard ([bool](Get-Prop $inputObject 'restoreClipboard' $true)) -VisualTarget $inputObject
-        return @{ok=$true;method='visual-clipboard-paste';verified=$false}
+        $clipboard = Type-Text -Text $text -RestoreClipboard $false -VisualTarget $inputObject
+        return @{ok=$true;method='visual-clipboard-paste';verified=$false;clipboard=$clipboard}
       }
 
       # Background path: post WM_CHAR straight into the target window's
@@ -2189,7 +2254,7 @@ function Invoke-Action {
         $result["note"] = "Synthesized Unicode key events; target was foreground + focused. Works on password fields (no paste)."
       } else {
         $restore = [bool](Get-Prop $inputObject "restoreClipboard" $true)
-        Type-Text -Text $text -RestoreClipboard $restore
+        $result['clipboard'] = Type-Text -Text $text -RestoreClipboard $restore -Editable $editable -InputTarget $inputObject
         $result["restoreClipboard"] = $restore
         $result["method"] = "clipboard-paste"
       }
@@ -2285,16 +2350,17 @@ function Invoke-Action {
       $prior = Get-Prop $inputObject 'expectedPriorValue' $null
       if ($null -ne $prior -and (Get-ValueText $el) -cne [string]$prior) { throw 'CONTENT_CHANGED: editable content changed after observation. No replacement sent.' }
       $method = Set-ElementValue $el -Value $value
+      $clipboard = $null
       if ($null -eq $method -and $fallback) {
         $el.SetFocus()
-        if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','a'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: select-all failed; effects may already exist.' }
         if ($value.Length -eq 0) {
+          if (-not [WindowsComputerUseNative]::SendKeyChord(@('Ctrl','a'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: select-all failed; effects may already exist.' }
           if (-not [WindowsComputerUseNative]::SendKeyChord(@('Backspace'))) { throw 'COMPUTER_USE_INPUT_UNAVAILABLE: empty replacement failed; effects may already exist.' }
-        } else { Type-Text -Text $value -RestoreClipboard $restore }
+        } else { $clipboard = Type-Text -Text $value -RestoreClipboard $restore -Editable $el -InputTarget $inputObject -Replace $true }
         $method = "FocusSelectAllTypeFallback"
       }
       if ($null -eq $method) { throw "Element has no ValuePattern and fallbackType is false." }
-      return ([ordered]@{ ok = $true; action = "set_value"; elementId = $elementId; method = $method; length = $value.Length })
+      return ([ordered]@{ ok = $true; action = "set_value"; elementId = $elementId; method = $method; length = $value.Length; clipboard = $clipboard })
     }
     "activate_window" {
       if (-not (Has-WindowTarget $inputObject)) { throw "Provide windowTitle, processId, or nativeWindowHandle." }

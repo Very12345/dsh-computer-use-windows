@@ -23,7 +23,7 @@ try {
   state=await call('get_window_state',{window,include_text:true});assert.ok(state.screenshot.width>0);assert.ok(state.accessibility.tree.includes('Verified input'));record('get_window_state','PNG dimensions and accessibility');
   await act('activate_window');record('activate_window','fresh target state');
   await act('click',{element_index:element('Verified input')});record('click','edit focus');
-  let typed=await act('type_text',{text:'对齐 A1'});assert.equal(typed.status,'verified');assert.equal(typed.verification.actual,'对齐 A1');record('type_text','Unicode exact readback');
+  let typed=await act('type_text',{text:'对齐 A1'});assert.equal(typed.status,'verified');assert.equal(typed.verification.actual,'对齐 A1');assert.equal(typed.clipboard.write_verified,true);record('type_text','Unicode clipboard proof and exact editor readback');
   await act('press_key',{key:'Control_L+a'});record('press_key','Ctrl+A dispatched');
   const set=await act('set_value',{element_index:element('Verified input'),value:'整值 B2'});assert.equal(set.status,'verified');assert.equal(set.verification.actual,'整值 B2');record('set_value','exact replacement readback');
   await act('secondary_action',{element_index:element('Invoke test'),action:'invoke'});assert.ok(state.accessibility.tree.includes('invokes=1'));record('secondary_action','Invoke changed fixture counter');
@@ -38,7 +38,7 @@ try {
   const coords=(x,y)=>({x:Math.round((x-shot.origin.x)*shot.scaleX),y:Math.round((y-shot.origin.y)*shot.scaleY)}),from=coords(canvas.x+60,canvas.y+100),to=coords(canvas.x+canvas.width-60,canvas.y+canvas.height-60);
   await act('drag',{from_x:from.x,from_y:from.y,to_x:to.x,to_y:to.y});assert.ok(state.accessibility.tree.includes('strokes=1'));record('drag','one completed stroke');
   await act('click',point(element('Visual input surface')));assert.equal(state.visual_input_ready,true);
-  const visual=await act('type_text',{text:'视觉 C3'});assert.equal(visual.status,'dispatched');assert.equal(visual.verification.mode,'visual');await fs.copyFile(state.screenshot.path,'.tmp/visual-tools-smoke.png');record('visual_type_text','dispatched with screenshot, no false readback claim');
+  const visual=await act('type_text',{text:'视觉 C3'});assert.equal(visual.status,'dispatched');assert.equal(visual.verification.mode,'visual');assert.equal(visual.clipboard.write_verified,true);assert.equal(visual.clipboard.retained,true);await fs.copyFile(state.screenshot.path,'.tmp/visual-tools-smoke.png');record('visual_type_text','verified clipboard retained for asynchronous input; no false editor readback claim');
   await act('click',{element_index:element('Verified input')});
   const cleared=await act('set_value',{element_index:element('Verified input'),value:''});assert.equal(cleared.status,'verified');
   await act('press_key',{key:'KP_1'});assert.equal(state.accessibility.document_text,'1');record('numpad_alias','KP_1 produced digit 1');

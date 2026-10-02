@@ -183,7 +183,7 @@ export class DesktopController {
             if (!observed.shot || !anchor) fail('FOCUS_REQUIRED', 'A focused editable element or a fresh successful left click with a delivered screenshot is required. Inspect the clicked input surface before visual typing.');
             if (!validRect(record.raw.boundingBox) || record.raw.boundingBox.width !== observed.rect.width || record.raw.boundingBox.height !== observed.rect.height) fail('LAYOUT_CHANGED','Window resized after visual focus. Click the input surface again.');
             if (observed.elements.some(e => e.hasKeyboardFocus && e.isPassword)) fail('APP_DENIED','Password entry is excluded.');
-            operation='type_text';extra={text:args.text,method:'clipboard',restoreClipboard:true,visual:true,expectedFocusHandle:anchor.focusHandle,expectedCursor:anchor.cursor};
+            operation='type_text';extra={text:args.text,method:'clipboard',restoreClipboard:false,visual:true,expectedFocusHandle:anchor.focusHandle,expectedCursor:anchor.cursor};
             break;
           }
           if (!focused) fail('FOCUS_REQUIRED', 'Observe accessibility with a focused editable element immediately before typing.');
@@ -239,9 +239,9 @@ export class DesktopController {
             await delay(100, undefined, { signal: exec.signal });
             record = await this.resolve(owner, args.window, exec.signal); state = await this.capture(owner, record, { include_screenshot: true, include_text: true }, exec.signal);
           }
-          return { status: readValue() === expected ? 'verified' : 'outcome_unknown', action, verification: { expected, actual: readValue() ?? null }, state, ...(readValue() !== expected ? { next: 'Input was dispatched. Inspect the refreshed state; do not blindly resend text.' } : {}) };
+          return { status: readValue() === expected ? 'verified' : 'outcome_unknown', action, ...(result.clipboard ? { clipboard: result.clipboard } : {}), verification: { expected, actual: readValue() ?? null }, state, ...(readValue() !== expected ? { next: 'Input was dispatched. Inspect the refreshed state; do not blindly resend text.' } : {}) };
         }
-        return { status: 'dispatched', action, method: result.method || operation, state, ...(extra.visual ? { verification: { mode:'visual',verified:false }, note:'Text was dispatched to the visually focused surface. Inspect the refreshed screenshot; no text readback is available. Do not blindly resend.' } : { note:'Refreshed state is evidence; inspect it before deciding the next action.' }) };
+        return { status: 'dispatched', action, method: result.method || operation, ...(result.clipboard ? { clipboard: result.clipboard } : {}), state, ...(extra.visual ? { verification: { mode:'visual',verified:false }, note:'Paste was dispatched to the visually focused surface. The intended clipboard text is retained for asynchronous reading; this is not proof that the editor received it. Inspect fresh state before any retry.' } : { note:'Refreshed state is evidence; inspect it before deciding the next action.' }) };
       } catch (error) { return this.unknown(error, action); }
     }, exec.signal);
   }

@@ -1,6 +1,6 @@
 {
   "name": "@very12345/dsh-computer-use-windows",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Windows desktop computer use for DSH with bound windows, fresh observations and verified actions",
   "type": "module",
   "license": "MIT",
@@ -42,6 +42,7 @@
     "verify": "npm test",
     "smoke": "node test/windows-smoke.js",
     "smoke:tools": "node test/run-tools-smoke.js",
+    "smoke:clipboard": "node test/clipboard-smoke.js",
     "setup-sdk": "node test/install-sdk.js"
   },
   "engines": {

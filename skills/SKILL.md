@@ -15,3 +15,5 @@ Use the `computer_*` tools for native Windows desktop tasks. Browser control is 
 Typical new document sequence: list apps → launch Notepad if needed → choose returned window → observe screenshot and accessibility → click observed Document → inspect refreshed focus → type literal text → check returned value and screenshot. A `Document` is an editable control too; do not assume every editor is an `Edit`.
 
 For ambiguous input into existing text or non-readable controls, the plugin reports uncertainty rather than claiming success. Use the refreshed screenshot and actual UI state to verify completion.
+
+`type_text` verifies Unicode clipboard contents before Ctrl+V. The `clipboard.write_verified` flag proves preparation, not editor delivery. For visual/custom editors, the intended text is retained for asynchronous reading (`clipboard.retained:true`); do not treat an empty or restored clipboard after older calls as proof that writing failed, and do not bypass input verification through shell clipboard scripts. A successful clipboard write with unchanged UI still requires fresh observation of the intended field before deciding whether another action is needed.

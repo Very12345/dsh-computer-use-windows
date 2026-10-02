@@ -76,6 +76,20 @@ test('visual text requires a successful click and reports dispatched without rea
  const f=await visualFixture();await assert.rejects(f.controller.act('a','type_text',{...input(f),text:'x'},f.exec),/fresh successful left click/);
  const clicked=await f.controller.act('a','click',{...input(f),x:50,y:50},f.exec);f.state=clicked.state;assert.equal(f.state.visual_input_ready,true);
  const r=await f.controller.act('a','type_text',{...input(f),text:'视觉'},f.exec);assert.equal(r.status,'dispatched');assert.equal(r.verification.verified,false);assert.equal(r.verification.mode,'visual');assert.equal(f.backend.calls.find(c=>c.action==='type_text').args.expectedFocusHandle,102);
+ assert.equal(f.backend.calls.find(c=>c.action==='type_text').args.restoreClipboard,false,'custom editors must retain the payload until their asynchronous read');
+});
+
+test('clipboard preparation rejection sends no text and is never replayed',async()=>{
+ const f=await fixture();const request=f.backend.request.bind(f.backend);let calls=0;
+ f.backend.request=async(action,args,signal)=>{if(action==='type_text'){calls++;const e=new Error('CLIPBOARD_VERIFY_FAILED: No text sent.');e.code='CLIPBOARD_VERIFY_FAILED';e.dispatched=false;throw e;}return request(action,args,signal);};
+ const r=await f.controller.act('a','type_text',{...input(f),text:'clipboard'},f.exec);assert.equal(r.status,'rejected');assert.equal(r.error.code,'CLIPBOARD_VERIFY_FAILED');assert.equal(f.backend.value,'');assert.equal(calls,1);
+});
+
+test('visual typing exposes clipboard write proof without claiming editor verification',async()=>{
+ const f=await visualFixture();f.state=(await f.controller.act('a','click',{...input(f),x:50,y:50},f.exec)).state;
+ const request=f.backend.request.bind(f.backend),proof={write_verified:true,restored:false,retained:true,restore_reason:'target_read_unconfirmed'};
+ f.backend.request=async(action,args,signal)=>{const result=await request(action,args,signal);return action==='type_text'?{...result,clipboard:proof}:result;};
+ const r=await f.controller.act('a','type_text',{...input(f),text:'clipboard'},f.exec);assert.deepEqual(r.clipboard,proof);assert.equal(r.status,'dispatched');assert.equal(r.verification.verified,false);
 });
 test('visual focus expires, is lost on reobservation, and cannot use an undelivered image',async()=>{
  for(const mode of ['expiry','reobserve','unseen']){
