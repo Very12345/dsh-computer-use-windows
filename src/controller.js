@@ -198,7 +198,11 @@ export class DesktopController {
           if (typeof args.value !== 'string' || args.value.length > 20000) fail('INVALID_ARGUMENT','value must be a string with at most 20000 characters.');
           operation = 'set_value'; extra = { elementId, value: args.value, expectedPriorValue: element.value }; expected = args.value; break;
         }
-        case 'scroll': operation = 'scroll'; extra = { ...this.point(observed, record, args.x, args.y), deltaX: number(args.scrollX ?? 0, 'scrollX'), deltaY: number(args.scrollY ?? 0, 'scrollY') }; break;
+        case 'scroll': {
+          const requestedDeltaX = number(args.scrollX ?? 0, 'scrollX'), requestedDeltaY = number(args.scrollY ?? 0, 'scrollY');
+          extra = { ...this.point(observed, record, args.x, args.y), deltaX: requestedDeltaX, deltaY: requestedDeltaY };
+          operation = 'scroll'; break;
+        }
         case 'drag': {
           const from = this.point(observed, record, args.from_x, args.from_y), to = this.point(observed, record, args.to_x, args.to_y);
           operation = 'drag'; extra = { path: [from, to], durationMs: 350 }; break;
@@ -241,7 +245,7 @@ export class DesktopController {
           }
           return { status: readValue() === expected ? 'verified' : 'outcome_unknown', action, ...(result.clipboard ? { clipboard: result.clipboard } : {}), verification: { expected, actual: readValue() ?? null }, state, ...(readValue() !== expected ? { next: 'Input was dispatched. Inspect the refreshed state; do not blindly resend text.' } : {}) };
         }
-        return { status: 'dispatched', action, method: result.method || operation, ...(result.clipboard ? { clipboard: result.clipboard } : {}), state, ...(extra.visual ? { verification: { mode:'visual',verified:false }, note:'Paste was dispatched to the visually focused surface. The intended clipboard text is retained for asynchronous reading; this is not proof that the editor received it. Inspect fresh state before any retry.' } : { note:'Refreshed state is evidence; inspect it before deciding the next action.' }) };
+        return { status: 'dispatched', action, method: result.method || operation, ...(action === 'scroll' ? { scroll: { requestedDeltaX: extra.deltaX, requestedDeltaY: extra.deltaY, emittedDeltaX: result.deltaX, emittedDeltaY: result.deltaY, notchesX: result.notchesX, notchesY: result.notchesY, limited: result.limited } } : {}), ...(result.clipboard ? { clipboard: result.clipboard } : {}), state, ...(extra.visual ? { verification: { mode:'visual',verified:false }, note:'Paste was dispatched to the visually focused surface. The intended clipboard text is retained for asynchronous reading; this is not proof that the editor received it. Inspect fresh state before any retry.' } : { note:'Refreshed state is evidence; inspect it before deciding the next action.' }) };
       } catch (error) { return this.unknown(error, action); }
     }, exec.signal);
   }

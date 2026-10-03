@@ -1675,6 +1675,31 @@ function Get-NativeWindowBounds {
   return [ordered]@{ x = $r.left; y = $r.top; width = $r.right - $r.left; height = $r.bottom - $r.top }
 }
 
+function Send-WheelDelta {
+  param([int]$Delta,[uint32]$Flags)
+  if ($Delta -eq 0) { return 0 }
+  $magnitude = [Math]::Abs($Delta)
+  $direction = if ($Delta -gt 0) { 1 } else { -1 }
+  $wholeNotches = [int][Math]::Floor($magnitude / 120)
+  $remainder = $magnitude % 120
+  $sent = 0
+  for ($i = 0; $i -lt $wholeNotches; $i++) {
+    [void](Test-Failsafe)
+    if ([WindowsComputerUseNative]::SendMouseEvent(0, 0, $Flags, ($direction * 120)) -ne 1) {
+      throw "COMPUTER_USE_INPUT_UNAVAILABLE: Windows accepted $sent wheel notches but rejected the next one. Reobserve; do not blindly resend."
+    }
+    $sent = $sent + 1
+    if ($i -lt ($wholeNotches - 1) -or $remainder -gt 0) { Start-Sleep -Milliseconds 12 }
+  }
+  if ($remainder -gt 0) {
+    [void](Test-Failsafe)
+    if ([WindowsComputerUseNative]::SendMouseEvent(0, 0, $Flags, ($direction * $remainder)) -ne 1) {
+      throw "COMPUTER_USE_INPUT_UNAVAILABLE: Windows accepted $sent wheel notches but rejected the remaining partial wheel delta. Reobserve; do not blindly resend."
+    }
+  }
+  return $wholeNotches
+}
+
 function Get-ExtendedFrameBounds {
   param([long]$Hwnd)
   if (-not ($Hwnd -and $Hwnd -ne 0)) { return $null }
@@ -2180,8 +2205,13 @@ function Invoke-Action {
     "scroll" {
       [void](Test-Failsafe)
       $point = Get-PointFromArgs $inputObject
-      $deltaY = [int](Get-Prop $inputObject "deltaY" 480)
-      $deltaX = [int](Get-Prop $inputObject "deltaX" 0)
+      $requestedDeltaY = [double](Get-Prop $inputObject "deltaY" 480)
+      $requestedDeltaX = [double](Get-Prop $inputObject "deltaX" 0)
+      if ([double]::IsNaN($requestedDeltaX) -or [double]::IsInfinity($requestedDeltaX) -or [double]::IsNaN($requestedDeltaY) -or [double]::IsInfinity($requestedDeltaY)) { throw 'Scroll deltas must be finite numbers.' }
+      $maxDelta = 3600 # At most 30 discrete 120-unit wheel notches per axis per call.
+      $deltaY = [int][Math]::Truncate([Math]::Max(-$maxDelta, [Math]::Min($maxDelta, $requestedDeltaY)))
+      $deltaX = [int][Math]::Truncate([Math]::Max(-$maxDelta, [Math]::Min($maxDelta, $requestedDeltaX)))
+      $limited = $deltaY -ne $requestedDeltaY -or $deltaX -ne $requestedDeltaX
       Activate-TargetIfRequested $inputObject
       if ((Has-WindowTarget $inputObject) -and ($null -eq $point.elementId)) {
         $target = Resolve-TargetWindow $inputObject
@@ -2195,14 +2225,11 @@ function Invoke-Action {
         Emit-DesktopActivity $point.x $point.y
         [void][WindowsComputerUseNative]::SetCursorPos($point.x, $point.y)
         Start-Sleep -Milliseconds 30
-        if ($deltaY -ne 0) {
-          [void][WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32][WindowsComputerUseNative]::MOUSEEVENTF_WHEEL, (-1 * $deltaY))
-        }
-        if ($deltaX -ne 0) {
-          [void][WindowsComputerUseNative]::SendMouseEvent(0, 0, [uint32][WindowsComputerUseNative]::MOUSEEVENTF_HWHEEL, $deltaX)
-        }
+        $notchesY = Send-WheelDelta -Delta (-1 * $deltaY) -Flags ([uint32][WindowsComputerUseNative]::MOUSEEVENTF_WHEEL)
+        $notchesX = Send-WheelDelta -Delta $deltaX -Flags ([uint32][WindowsComputerUseNative]::MOUSEEVENTF_HWHEEL)
       }
-      return ([ordered]@{ ok = $true; action = "scroll"; x = $point.x; y = $point.y; deltaX = $deltaX; deltaY = $deltaY; elementId = $point.elementId })
+      else { $notchesY = 0; $notchesX = 0 }
+      return ([ordered]@{ ok = $true; action = "scroll"; x = $point.x; y = $point.y; requestedDeltaX = $requestedDeltaX; requestedDeltaY = $requestedDeltaY; deltaX = $deltaX; deltaY = $deltaY; notchesX = $notchesX; notchesY = $notchesY; limited = $limited; elementId = $point.elementId })
     }
     "type_text" {
       [void](Test-Failsafe)
