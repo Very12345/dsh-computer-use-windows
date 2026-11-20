@@ -13,12 +13,12 @@ export const SKILL = readFileSync(new URL('../skills/SKILL.md', import.meta.url)
 
 export class ComputerUseWindows {
   static inject = ['tools','systemPrompt','settings'];
-  static Config = z.object({ enabled: z.boolean().default(true).volatile(), showOverlay: z.boolean().default(true).volatile(), accessMode: z.union(['desktop','selected']).default('desktop').volatile(), allowedApps: z.array(z.string()).default([]).volatile() });
+  static Config = z.object({ enabled: z.boolean().default(true).volatile(), showOverlay: z.boolean().default(true).volatile(), accessMode: z.union(['desktop','selected']).default('desktop').volatile(), allowedApps: z.array(z.string()).default([]).volatile(), allowBrowserApps: z.boolean().default(false).volatile() });
   constructor(ctx, config) {
     this.ctx = ctx; this.config = config; this.grants = new Map(); this.error = ''; this.lastEnabled = this.enabled; this.manualStopEpoch = 0;
     this.overlay = new DesktopOverlay({onCancel:async event=>{this.manualStopEpoch++;this.error=event.reason==='physical_escape'?'Stopped with Esc. Resume in Computer Use settings.':'Esc listener unavailable. Computer use was stopped; resume in settings.';await this.controller.stop();}});
     this.backend = new WindowsBackend({ onActivity: event => this.overlay.point(event) });
-    this.controller = new DesktopController(this.backend, { authorize: (app, exec, consequential, reason) => this.authorize(app, exec, consequential, reason), onObserve: (owner,rect,signal) => this.overlay.show(owner,rect,signal,this.showOverlay), onStop: () => this.overlay.hide() });
+    this.controller = new DesktopController(this.backend, { authorize: (app, exec, consequential, reason) => this.authorize(app, exec, consequential, reason), onObserve: (owner,rect,signal) => this.overlay.show(owner,rect,signal,this.showOverlay), onStop: () => this.overlay.hide(), allowBrowserApps: this.allowBrowserApps });
     ctx.effect(() => ctx.settings.configure({ auto: false }));
     ctx.provide('computerUseWindows', this);
     ctx.on('agent/disposed', ({ agent }) => { this.overlay.hide(agent.id);this.controller.releaseOwner(agent.id); this.grants.delete(agent.id); });
@@ -71,7 +71,8 @@ export class ComputerUseWindows {
   get enabled() { return valueOf(this.config.enabled) === true; }
   get showOverlay() { return valueOf(this.config.showOverlay) !== false; }
   get accessMode() { return valueOf(this.config.accessMode) || 'desktop'; }
-  get allowedApps() { return normalizeAllowedApps(valueOf(this.config.allowedApps) || []); }
+  get allowBrowserApps() { return valueOf(this.config.allowBrowserApps) === true; }
+  get allowedApps() { return normalizeAllowedApps(valueOf(this.config.allowedApps) || [], { allowBrowserApps: this.allowBrowserApps }); }
   async authorize(app, exec, consequential, reason) {
     const owner = exec.agent?.id || 'host';
     if (!consequential && (this.accessMode === 'desktop' || this.allowedApps.includes(app) || this.grants.get(owner)?.has(app))) return;
@@ -81,7 +82,7 @@ export class ComputerUseWindows {
     if (outcome !== 'allowed-once') throw new Error('APP_APPROVAL_REJECTED: ' + outcome);
     if (!consequential) { if (!this.grants.has(owner)) this.grants.set(owner,new Set()); this.grants.get(owner).add(app); }
   }
-  status() { return { ok: true, enabled: this.enabled, stopped: this.controller.stopped, supported: process.platform === 'win32', showOverlay:this.showOverlay, accessMode: this.accessMode, allowedApps: this.allowedApps, error: this.error }; }
+  status() { return { ok: true, enabled: this.enabled, stopped: this.controller.stopped, supported: process.platform === 'win32', showOverlay:this.showOverlay, accessMode: this.accessMode, allowedApps: this.allowedApps, allowBrowserApps: this.allowBrowserApps, error: this.error }; }
   routes(ctx) {
     const send = (res, status, data) => { res.writeHead(status, { 'Content-Type':'application/json', 'Cache-Control':'no-store' }); res.end(JSON.stringify(data)); };
     ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: ROUTE, handler: async (req, res) => {
@@ -95,11 +96,15 @@ export class ComputerUseWindows {
         if (input.enabled !== undefined) { if (typeof input.enabled !== 'boolean') throw new Error('enabled must be boolean'); update.enabled = input.enabled; }
         if (input.showOverlay !== undefined) { if (typeof input.showOverlay !== 'boolean') throw new Error('showOverlay must be boolean');update.showOverlay=input.showOverlay; }
         if (input.accessMode !== undefined) { if (!['desktop','selected'].includes(input.accessMode)) throw new Error('Unknown application access mode'); update.accessMode = input.accessMode; }
-        if (input.allowedApps !== undefined) update.allowedApps = normalizeAllowedApps(input.allowedApps);
+        if (input.allowBrowserApps !== undefined) { if (typeof input.allowBrowserApps !== 'boolean') throw new Error('allowBrowserApps must be boolean'); update.allowBrowserApps = input.allowBrowserApps; }
+        if (input.allowedApps !== undefined) update.allowedApps = normalizeAllowedApps(input.allowedApps, { allowBrowserApps: update.allowBrowserApps ?? this.allowBrowserApps });
         const resume = input.enabled === true || (input.enabled !== false && !this.controller.stopped);
         const stopEpoch = this.manualStopEpoch;
         await this.ctx.settings.update('computer-use-windows', update);
-        this.grants.clear(); await this.controller.stop(); if (this.enabled && resume && this.manualStopEpoch === stopEpoch) this.controller.resume(); this.lastEnabled = this.enabled; this.error = '';
+        this.grants.clear(); await this.controller.stop();
+        // Apply the browser switch to the live controller so no restart is needed.
+        this.controller.setAllowBrowserApps(this.allowBrowserApps);
+        if (this.enabled && resume && this.manualStopEpoch === stopEpoch) this.controller.resume(); this.lastEnabled = this.enabled; this.error = '';
         return send(res,200,this.status());
       } catch (error) { this.error = error.message; return send(res,400,{ ...this.status(),ok:false }); }
     } }));

@@ -130,3 +130,39 @@ test('stop while the observation UI is starting cannot publish a late usable obs
  let armed=false;const f=await fixture({onObserve:async()=>{if(armed){await f.controller.stop();f.controller.resume();}}});armed=true;
  await assert.rejects(f.controller.observe('a',{window:f.window,include_text:true},f.exec),/stopped during observation/);assert.equal(f.controller.observations.size,0);
 });
+
+test('browser access is opt-in and never relaxes terminal or credential exclusions', () => {
+  // Default: browsers stay out.
+  for (const app of ['chrome.exe', 'msedge.exe']) assert.throws(() => assertApp(app), /DENIED/);
+  assert.throws(() => normalizeAllowedApps(['chrome.exe']), /DENIED/);
+  // Opted in: browsers pass, everything else stays blocked.
+  assert.equal(assertApp('chrome.exe', '', { allowBrowserApps: true }), 'chrome.exe');
+  assert.equal(assertApp('C:/Program Files/Microsoft/Edge/msedge.exe', '', { allowBrowserApps: true }), 'msedge.exe');
+  assert.deepEqual(normalizeAllowedApps(['chrome.exe'], { allowBrowserApps: true }), ['chrome.exe']);
+  for (const app of ['pwsh.exe', 'cmd.exe', '1password.exe', 'keepassxc.exe', 'lockapp.exe'])
+    assert.throws(() => assertApp(app, '', { allowBrowserApps: true }), /DENIED/);
+  // Credential-looking titles stay blocked even for an allowed browser.
+  assert.throws(() => assertApp('chrome.exe', 'Sign in - Google Accounts', { allowBrowserApps: true }), /DENIED/);
+  // A disabled switch must not be re-enabled by a saved allowlist entry.
+  assert.throws(() => normalizeAllowedApps(['chrome.exe'], { allowBrowserApps: false }), /DENIED/);
+});
+
+test('controller exposes a live browser switch and gates the app catalog', async () => {
+  const backend = new FakeBackend();
+  backend.apps = [{ executable: 'C:/Program Files/Google/Chrome/chrome.exe', name: 'Chrome' }, { executable: 'C:/Windows/notepad.exe', name: 'Notepad' }];
+  const off = new DesktopController(backend);
+  const hidden = await off.listApps('a', execution().signal);
+  assert.equal(hidden.apps.some(a => a.id === 'chrome.exe'), false);
+  assert.equal(hidden.apps.some(a => a.id === 'notepad.exe'), true);
+
+  const on = new DesktopController(backend, { allowBrowserApps: true });
+  const shown = await on.listApps('a', execution().signal);
+  assert.equal(shown.apps.some(a => a.id === 'chrome.exe'), true);
+
+  // The toggle also works at runtime, without recreating the controller.
+  off.setAllowBrowserApps(true);
+  const after = await off.listApps('a', execution().signal);
+  assert.equal(after.apps.some(a => a.id === 'chrome.exe'), true);
+  off.setAllowBrowserApps(false);
+  assert.equal(off.policy.allowBrowserApps, false);
+});

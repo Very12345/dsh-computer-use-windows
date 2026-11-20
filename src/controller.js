@@ -11,11 +11,15 @@ const identity = w => [w.nativeWindowHandle, w.processId, w.processStartedAt, ap
 
 /** One queue across all agents because they share one physical desktop. */
 export class DesktopController {
-  constructor(backend, { authorize = async () => {}, onObserve = async () => {}, onStop = () => {}, now = Date.now, ttlMs = 300000, verifyMs = 2500 } = {}) {
+  constructor(backend, { authorize = async () => {}, onObserve = async () => {}, onStop = () => {}, now = Date.now, ttlMs = 300000, verifyMs = 2500, allowBrowserApps = false } = {}) {
     this.backend = backend; this.authorize = authorize; this.now = now; this.ttlMs = ttlMs; this.verifyMs = verifyMs;
-    this.onObserve = onObserve; this.onStop = onStop;
+    this.onObserve = onObserve; this.onStop = onStop; this.allowBrowserApps = allowBrowserApps === true;
     this.windows = new Map(); this.observations = new Map(); this.apps = new Map(); this.epoch = 0; this.queue = Promise.resolve(); this.stopped = false; this.generation = 0;
   }
+  /** Current policy flags for every executable check in this controller. */
+  get policy() { return { allowBrowserApps: this.allowBrowserApps }; }
+  /** Update the browser relaxation without recreating the controller. */
+  setAllowBrowserApps(value) { this.allowBrowserApps = value === true; }
   serialize(fn, signal) {
     const generation = this.generation;
     const run = this.queue.catch(() => {}).then(() => { signal?.throwIfAborted(); if (this.stopped || this.generation !== generation) fail('STOPPED', 'Computer use is stopped. Obtain fresh state after resuming.'); return fn(); });
@@ -27,7 +31,7 @@ export class DesktopController {
     const windows = [];
     for (const raw of result.windows || []) {
       if (raw.isOffscreen || raw.boundingBox?.width < 20 || raw.boundingBox?.height < 20 || !raw.processStartedAt) continue;
-      let app; try { app = assertApp(raw.executable, raw.name); } catch { continue; }
+      let app; try { app = assertApp(raw.executable, raw.name, this.policy); } catch { continue; }
       let record = [...this.windows.values()].find(w => w.owner === owner && identity(w.raw) === identity(raw));
       if (!record) { record = { id: identifier('window'), owner, raw }; this.windows.set(record.id, record); }
       else record.raw = raw;
@@ -46,7 +50,7 @@ export class DesktopController {
       const native = await this.request('list_apps', {}, signal);
       const result = new Map();
       for (const raw of native.apps || []) {
-        let app; try { app = assertApp(raw.executable); } catch { continue; }
+        let app; try { app = assertApp(raw.executable, '', this.policy); } catch { continue; }
         this.apps.set(app, { executable: raw.executable }); result.set(app, { id: app, name: raw.name || app, running: false, windows: [] });
       }
       for (const w of windows) {
@@ -61,7 +65,7 @@ export class DesktopController {
     const expected = identity(record.raw); await this.enumerate(owner, signal);
     const current = this.windows.get(id);
     if (!current || identity(current.raw) !== expected) fail('WINDOW_CHANGED', 'Window closed or its owning process changed. Select a fresh returned window.');
-    assertApp(current.raw.executable, current.raw.name);
+    assertApp(current.raw.executable, current.raw.name, this.policy);
     return current;
   }
   target(record) { return { nativeWindowHandle: record.raw.nativeWindowHandle, processId: record.raw.processId, processStartedAt: record.raw.processStartedAt }; }
@@ -73,12 +77,12 @@ export class DesktopController {
     return this.serialize(async () => {
       let known = this.apps.get(String(app).toLowerCase());
       if (!known && typeof app === 'string' && /^[a-z]:[\\/]/i.test(app) && /\.exe$/i.test(app)) {
-        assertApp(app);
+        assertApp(app, '', this.policy);
         if (!(await stat(app).catch(() => null))?.isFile()) fail('APP_UNKNOWN', 'Explicit executable path must name an existing local .exe file.');
         known = { executable: app };
       }
       if (!known) fail('APP_UNKNOWN', 'Select an app id returned by computer_list_apps; arbitrary commands and arguments are not accepted.');
-      assertApp(known.executable); await this.authorize(appName(known.executable), exec, false, 'Launch desktop app'); exec.signal?.throwIfAborted();
+      assertApp(known.executable, '', this.policy); await this.authorize(appName(known.executable), exec, false, 'Launch desktop app'); exec.signal?.throwIfAborted();
       this.epoch++; this.observations.clear();
       try {
         await this.request('launch_app', { executable: known.executable }, exec.signal);

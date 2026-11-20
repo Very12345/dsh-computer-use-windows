@@ -66,6 +66,19 @@ test('desktop mode cannot expose excluded browser windows',async(t)=>{
   const f=await setup(t,{accessMode:'desktop'});if(!f)return;f.plugin.controller.backend.window.executable='msedge.exe';
   const listed=await f.invoke('computer_list_windows');assert.deepEqual(JSON.parse(listed.value).windows,[]);
 });
+test('browser windows become visible only after the settings switch',async(t)=>{
+  const f=await setup(t,{allowBrowserApps:true});if(!f)return;
+  f.plugin.controller.backend.window.executable='msedge.exe';
+  const listed=await f.invoke('computer_list_windows');
+  assert.deepEqual(JSON.parse(listed.value).windows.map(w=>w.app),['msedge.exe']);
+  const enabled=await f.api({allowBrowserApps:true});assert.equal(enabled.status,200);assert.equal(enabled.body.allowBrowserApps,true);
+  const off=await f.api({allowBrowserApps:false});assert.equal(off.status,200);assert.equal(off.body.allowBrowserApps,false);
+  // The live controller follows the saved setting without a restart.
+  assert.equal(f.plugin.controller.policy.allowBrowserApps,false);
+  const hidden=await f.invoke('computer_list_windows');assert.deepEqual(JSON.parse(hidden.value).windows,[]);
+  // A browser cannot be smuggled into the allowlist while the switch is off.
+  const rejected=await f.api({allowedApps:['chrome.exe']});assert.equal(rejected.status,400);
+});
 test('settings access mode persists and rejects unknown modes',async(t)=>{
   const f=await setup(t);if(!f)return;const valid=await f.api({accessMode:'desktop'});assert.equal(valid.status,200);assert.equal(f.plugin.accessMode,'desktop');
   const invalid=await f.api({accessMode:'everything'});assert.equal(invalid.status,400);assert.equal(f.plugin.accessMode,'desktop');
